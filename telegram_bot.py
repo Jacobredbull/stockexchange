@@ -1,5 +1,5 @@
 """
-Antigravity V3.1 — Telegram Bot (Monitoring & Alerts)
+stockexchange_V0.1 — Telegram Bot (Monitoring & Alerts)
 
 Functions:
   send_summary()   — Post-run session report (Bias, P/L, Gainers/Losers, Shadow Alerts)
@@ -188,7 +188,7 @@ def send_summary(session_name: str = "Session", success: bool = True):
 
     # Build message
     lines = [
-        f"{status_icon} *Antigravity V3.1 — {session_name}*",
+        f"{status_icon} *stockexchange\\_V0.1 — {session_name}*",
         f"📅 {now_ny} ({now_ldn})",
         "",
         f"*🌍 Macro Environment*",
@@ -262,7 +262,7 @@ def send_heartbeat():
         holdings_count = 0
 
     text = (
-        f"💓 *Antigravity V3.1 — Heartbeat*\n"
+        f"💓 *stockexchange\\_V0.1 — Heartbeat*\n"
         f"📅 Monday {now_ny} ({now_ldn})\n"
         f"\n"
         f"🤖 System: `ONLINE`\n"

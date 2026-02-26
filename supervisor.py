@@ -1,5 +1,5 @@
 """
-Antigravity V3.1 — Supervisor (NYSE-Aware Scheduler)
+stockexchange_V0.1 — Supervisor (NYSE-Aware Scheduler)
 
 Handles two trading sessions per day:
   Session 1 (Morning Guard):  market_open  + 15 min
@@ -232,7 +232,7 @@ def check_db_integrity():
 
 def main(dry_run: bool = False):
     log.info("=" * 60)
-    log.info("Antigravity V3.1 Supervisor — Starting")
+    log.info("stockexchange_V0.1 Supervisor — Starting")
     check_db_integrity()
     log.info(f"  Timezone: {TZ_NY} | DST active: {bool(datetime.now(TZ_NY).dst())}")
     log.info("=" * 60)
@@ -307,7 +307,7 @@ def main(dry_run: bool = False):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Antigravity V3.1 Supervisor")
+    parser = argparse.ArgumentParser(description="stockexchange_V0.1 Supervisor")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print schedule without executing pipeline")
     args = parser.parse_args()

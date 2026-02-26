@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────
-# Antigravity V3.1 — ARM64 (Raspberry Pi 5)
+# stockexchange_V0.1 — ARM64 (Raspberry Pi 5)
 # ─────────────────────────────────────────────
 FROM python:3.11-slim
 

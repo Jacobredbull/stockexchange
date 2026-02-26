@@ -1,9 +1,9 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
-# Antigravity V3.1 — Remote Workflow Updater
+# stockexchange_V0.1 — Remote Workflow Updater
 # ---------------------------------------------------------------------------
 
-echo "🔄 Fetching latest Antigravity updates..."
+echo "🔄 Fetching latest stockexchange_V0.1 updates..."
 git pull origin main
 
 echo "⚠️  Restarting Docker container..."

@@ -1,4 +1,4 @@
-# 🧠 Antigravity V3.1 — AI Trading Brain
+# 🧠 stockexchange_V0.1 — AI Trading Brain
 
 > Autonomous AI trading system with macro-environmental awareness, shadow linking, and 24/7 Raspberry Pi deployment.
 
