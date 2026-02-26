@@ -1,0 +1,37 @@
+# Environments
+.env
+.venv/
+venv/
+env/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Logs and Outputs
+logs/
+*.log
+output.txt
+output_final.txt
+output_sq_check.txt
+
+# Application State & Data
+data/
+*.db
+trade_history.db
+sentiment_data.json
+execution_plan.json
+current_portfolio.json
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS Generated
+.DS_Store
+Thumbs.db

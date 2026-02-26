@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────
+# Antigravity V3.1 — Docker Compose (Pi 5)
+# ─────────────────────────────────────────────
+services:
+  antigravity:
+    build: .
+    container_name: antigravity_v31
+    restart: always
+    env_file: .env
+    environment:
+      - TZ=America/New_York
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Persist database across container restarts / rebuilds
+      - ./data:/app/data
+      # Persist logs
+      - ./logs:/app/logs
+      # Allow live .env updates without rebuild
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "from supervisor import check_heartbeat; exit(0 if check_heartbeat(300) else 1)"]
+      interval: 120s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
