@@ -20,12 +20,22 @@ WORKDIR /app
 # Step 3: Upgrade pip toolchain
 RUN pip install --upgrade pip
 
-# Step 4: Install remaining lightweight packages
-# Uses PiWheels as extra index to find ARM pre-built wheels
+# Step 4: Install all packages EXCEPT google-genai first (with full deps)
+# This lets alpaca-trade-api lock websockets to <11
 COPY requirements.txt .
 RUN pip install --no-cache-dir \
     --extra-index-url https://www.piwheels.org/simple \
-    -r requirements.txt
+    $(grep -v google-genai requirements.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ')
+
+# Step 5: Install google-genai WITHOUT its deps to bypass websockets>=13 conflict
+# Our code only uses REST generate_content(), not live streaming, so websockets is irrelevant
+RUN pip install --no-cache-dir --no-deps \
+    --extra-index-url https://www.piwheels.org/simple \
+    google-genai==0.3.0
+# Install google-genai's non-websockets deps manually
+RUN pip install --no-cache-dir \
+    --extra-index-url https://www.piwheels.org/simple \
+    google-auth httpx pydantic
 
 # Step 5: Copy app code and create persistent dirs
 COPY . .
