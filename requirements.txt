@@ -1,13 +1,13 @@
 feedparser
-requests
+# requests (Installed via apt python3-requests)
 python-dotenv
 openai>=1.12.0
 httpx<0.28.0
-Cython<3.0
-PyYAML>=6.0.1
+# Cython<3.0
+# PyYAML>=6.0.1 (Installed via apt python3-yaml)
 alpaca-trade-api
-pandas
-numpy
+# pandas (Installed via apt python3-pandas)
+# numpy (Installed via apt python3-numpy)
 streamlit
 google-genai
 pandas_market_calendars
