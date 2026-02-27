@@ -1,23 +1,39 @@
+# ─────────────────────────────────────────────
+# stockexchange_V0.1 — ARM32 (Raspberry Pi 5)
+# DEFINITIVE BUILD: apt + PiWheels
+# ─────────────────────────────────────────────
 FROM python:3.11-slim-bookworm
 
-# 1. 安装最轻量级的数学支持（不再需要 build-essential，因为我们不编译）
-RUN apt-get update && apt-get install -y \
-    libopenblas-dev \
+# Step 1: Install heavy libraries via apt (pre-compiled for ARM32 by Debian)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-numpy \
+    python3-pandas \
+    python3-yaml \
+    python3-requests \
+    python3-pytz \
     && rm -rf /var/lib/apt/lists/*
+
+# Step 2: Allow Python to see the apt-installed packages
+ENV PYTHONPATH=/usr/lib/python3/dist-packages
 
 WORKDIR /app
 
-# 2. 强制 pip 只寻找预编译包，不许编译
-COPY requirements.txt .
+# Step 3: Upgrade pip toolchain
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 
-# 3. 复制逻辑代码并创建必须的文件夹
+# Step 4: Install remaining lightweight packages
+# Uses PiWheels as extra index to find ARM pre-built wheels
+COPY requirements.txt .
+RUN pip install --no-cache-dir \
+    --extra-index-url https://www.piwheels.org/simple \
+    -r requirements.txt
+
+# Step 5: Copy app code and create persistent dirs
 COPY . .
 RUN mkdir -p /app/logs /app/data
 
-# 4. 健康检查 (用于 Supervisor 监控)
+# Healthcheck: verify supervisor heartbeat file is < 5 min old
 HEALTHCHECK --interval=120s --timeout=10s --retries=3 \
     CMD python -c "from supervisor import check_heartbeat; exit(0 if check_heartbeat(300) else 1)"
 
-CMD ["python", "supervisor.py"]
+CMD ["python", "-u", "supervisor.py"]

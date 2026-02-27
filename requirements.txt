@@ -1,17 +1,10 @@
-# 锁定底层数学库
-numpy==1.26.4
-pandas==2.2.2
-PyYAML==6.0.1
+# numpy, pandas, PyYAML, requests, pytz → installed via apt (pre-compiled for ARM32)
+# All remaining packages below → installed via pip + PiWheels
 
-# 锁定核心逻辑库
 feedparser==6.0.12
-requests==2.32.5
 python-dotenv==1.2.1
 openai>=1.12.0
 httpx<0.28.0
 alpaca-trade-api==3.1.1
-
-# 锁定 AI 与交易日历
 google-genai==0.3.0
 pandas_market_calendars==4.4.1
-pytz==2024.1
