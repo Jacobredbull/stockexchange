@@ -1,47 +1,34 @@
-# ─────────────────────────────────────────────
-# stockexchange_V0.1 — ARM32 (Raspberry Pi 5)
-# DEFINITIVE BUILD: apt + PiWheels
-# ─────────────────────────────────────────────
 FROM python:3.11-slim-bookworm
 
-# Step 1: Install heavy libraries via apt (pre-compiled for ARM32 by Debian)
+# 1. 安装 NumPy 和 Pandas 运行所需的底层共享库 (Shared Objects)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-numpy \
-    python3-pandas \
-    python3-yaml \
-    python3-requests \
+    libopenblas0 \
+    liblapack3 \
     && rm -rf /var/lib/apt/lists/*
-
-# Step 2: Allow Python to see the apt-installed packages
-ENV PYTHONPATH=/usr/lib/python3/dist-packages
 
 WORKDIR /app
 
-# Step 3: Upgrade pip toolchain
+# 2. 升级 pip
+COPY requirements.txt .
 RUN pip install --upgrade pip
 
-# Step 4: Install all packages EXCEPT google-genai first (with full deps)
-# This lets alpaca-trade-api lock websockets to <11
-COPY requirements.txt .
-RUN pip install --no-cache-dir \
+# 3. 安装除 google-genai 之外的所有依赖
+# 用 --prefer-binary 避免从源码编译
+RUN pip install --no-cache-dir --prefer-binary \
     --extra-index-url https://www.piwheels.org/simple \
     $(grep -v google-genai requirements.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ')
 
-# Step 5: Install google-genai WITHOUT its deps to bypass websockets>=13 conflict
-# Our code only uses REST generate_content(), not live streaming, so websockets is irrelevant
-RUN pip install --no-cache-dir --no-deps \
-    --extra-index-url https://www.piwheels.org/simple \
-    google-genai==0.3.0
-# Install google-genai's non-websockets deps manually
-RUN pip install --no-cache-dir \
-    --extra-index-url https://www.piwheels.org/simple \
-    google-auth httpx pydantic
+# 4. 单独安装 google-genai (--no-deps 绕过 websockets>=13 冲突)
+# alpaca-trade-api 需要 websockets<11，google-genai 需要 websockets>=13，二者冲突
+# 我们只用 REST generate_content()，不需要 websockets，所以跳过它的依赖安全
+RUN pip install --no-cache-dir --no-deps google-genai==0.3.0
+RUN pip install --no-cache-dir --prefer-binary google-auth httpx pydantic
 
-# Step 5: Copy app code and create persistent dirs
+# 5. 拷贝代码并创建持久化目录
 COPY . .
 RUN mkdir -p /app/logs /app/data
 
-# Healthcheck: verify supervisor heartbeat file is < 5 min old
+# 健康检查
 HEALTHCHECK --interval=120s --timeout=10s --retries=3 \
     CMD python -c "from supervisor import check_heartbeat; exit(0 if check_heartbeat(300) else 1)"
 
