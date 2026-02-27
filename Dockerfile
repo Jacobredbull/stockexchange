@@ -21,6 +21,13 @@ RUN pip install --upgrade pip setuptools wheel
 # 3. 设置工作目录
 WORKDIR /app
 
+# 4. 创建一个假的 pyarrow 包，骗过 pip 不要再去拉取和编译
+RUN mkdir -p /tmp/dummy_pyarrow/pyarrow && \
+    touch /tmp/dummy_pyarrow/pyarrow/__init__.py && \
+    echo "from setuptools import setup; setup(name='pyarrow', version='99.0.0', packages=['pyarrow'])" > /tmp/dummy_pyarrow/setup.py && \
+    pip install /tmp/dummy_pyarrow && \
+    rm -rf /tmp/dummy_pyarrow
+
 # 4. 复制并安装依赖
 # 注意：只安装 requirements.txt 中剩下的库
 COPY requirements.txt .
