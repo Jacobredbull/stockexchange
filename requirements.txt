@@ -8,7 +8,7 @@ httpx<0.28.0
 alpaca-trade-api
 # pandas (Installed via apt python3-pandas)
 # numpy (Installed via apt python3-numpy)
-streamlit
+# streamlit (Removed for headless Pi deployment to avoid pyarrow compilation)
 google-genai
 pandas_market_calendars
 pytz
