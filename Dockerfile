@@ -1,34 +1,40 @@
 FROM python:3.11-slim-bookworm
 
-# 1. 安装 NumPy 和 Pandas 运行所需的底层共享库 (Shared Objects)
+# 1. Build tools + runtime libs for numpy/pandas on ARM
+#    gcc/g++/gfortran: compile C extensions when no binary wheel exists
+#    libopenblas-dev/liblapack-dev: linear algebra backends for numpy
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libopenblas0 \
-    liblapack3 \
+    gcc g++ gfortran \
+    libopenblas-dev liblapack-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 2. 升级 pip
-COPY requirements.txt .
+# 2. Upgrade pip
 RUN pip install --upgrade pip
 
-# 3. 安装除 google-genai 之外的所有依赖
-# 用 --prefer-binary 避免从源码编译
+# 3. Install all packages except google-genai
+#    --prefer-binary: use pre-built wheels over sdist (key for ARM speed)
+#    piwheels.org: Raspberry Pi pre-compiled ARM wheels repository
+COPY requirements.txt .
 RUN pip install --no-cache-dir --prefer-binary \
     --extra-index-url https://www.piwheels.org/simple \
-    $(grep -v google-genai requirements.txt | grep -v '^#' | grep -v '^$' | tr '\n' ' ')
+    -r requirements.txt
 
-# 4. 单独安装 google-genai (--no-deps 绕过 websockets>=13 冲突)
-# alpaca-trade-api 需要 websockets<11，google-genai 需要 websockets>=13，二者冲突
-# 我们只用 REST generate_content()，不需要 websockets，所以跳过它的依赖安全
-RUN pip install --no-cache-dir --no-deps google-genai==0.3.0
+# 4. Install google-genai without its deps (avoids websockets conflict)
+#    alpaca-trade-api needs websockets<11
+#    google-genai needs websockets>=13  →  irreconcilable conflict
+#    We only use google-genai's REST generate_content(), not streaming,
+#    so skipping websockets is safe.
+COPY requirements-genai.txt .
+RUN pip install --no-cache-dir --no-deps -r requirements-genai.txt
 RUN pip install --no-cache-dir --prefer-binary google-auth httpx pydantic
 
-# 5. 拷贝代码并创建持久化目录
+# 5. Copy application code and create persistent data directories
 COPY . .
 RUN mkdir -p /app/logs /app/data
 
-# 健康检查
+# 6. Docker health check (file-based heartbeat written by supervisor.py)
 HEALTHCHECK --interval=120s --timeout=10s --retries=3 \
     CMD python -c "from supervisor import check_heartbeat; exit(0 if check_heartbeat(300) else 1)"
 

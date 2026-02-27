@@ -230,13 +230,8 @@ def check_db_integrity():
         return False
 
 
-def main(dry_run: bool = False):
-    log.info("=" * 60)
-    log.info("stockexchange_V0.1 Supervisor — Starting")
-    check_db_integrity()
-    log.info(f"  Timezone: {TZ_NY} | DST active: {bool(datetime.now(TZ_NY).dst())}")
-    log.info("=" * 60)
-
+def _run_loop(dry_run: bool):
+    """Main supervisor loop, runs continuously."""
     while True:
         write_heartbeat()
         now_et = datetime.now(TZ_NY)
@@ -304,6 +299,51 @@ def main(dry_run: bool = False):
         )
         log.info(f"Day complete. Next session: {next_day} 09:00 ET")
         sleep_until(next_open, f"next open ({next_day})")
+
+
+def main(dry_run: bool = False):
+    log.info("=" * 60)
+    log.info("stockexchange_V0.1 Supervisor — Starting")
+    check_db_integrity()
+    log.info(f"  Timezone: {TZ_NY} | DST active: {bool(datetime.now(TZ_NY).dst())}")
+    log.info("=" * 60)
+
+    # --- Startup Telegram ping (lets you know the Pi booted OK) ---
+    if not dry_run:
+        try:
+            import telegram_bot
+            now_et = datetime.now(TZ_NY)
+            telegram_bot.send_emergency_alert(
+                f"🚀 Antigravity supervisor started on Pi\n"
+                f"   Time (ET): {now_et.strftime('%Y-%m-%d %H:%M')}\n"
+                f"   Next session: Morning Guard at market open +15min"
+            )
+        except Exception as e:
+            log.warning(f"Startup Telegram ping failed: {e}")
+
+    # Outer crash-recovery loop: if _run_loop raises unexpectedly,
+    # alert via Telegram and restart after 60s (container stays alive).
+    while True:
+        try:
+            _run_loop(dry_run)
+        except KeyboardInterrupt:
+            log.info("Supervisor stopped by user (KeyboardInterrupt).")
+            break
+        except Exception as crash:
+            import traceback
+            tb = traceback.format_exc()
+            log.error(f"💥 SUPERVISOR CRASH: {crash}\n{tb}")
+            try:
+                import telegram_bot
+                telegram_bot.send_emergency_alert(
+                    f"💥 SUPERVISOR CRASH on Pi\n"
+                    f"Error: {crash}\n\n"
+                    f"Traceback (last 500 chars):\n{tb[-500:]}"
+                )
+            except Exception:
+                pass
+            log.info("Restarting supervisor loop in 60s...")
+            time.sleep(60)
 
 
 if __name__ == "__main__":

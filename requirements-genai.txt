@@ -1,0 +1,3 @@
+# Installed separately with --no-deps to avoid websockets version conflict
+# with alpaca-trade-api (needs websockets<11, google-genai needs websockets>=13)
+google-genai==0.3.0
