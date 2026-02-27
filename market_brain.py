@@ -370,7 +370,7 @@ Return ONLY the raw JSON array. No markdown, no code blocks."""
                 status = "🚩 FLAGGED" if result.get('flagged') else "✅"
                 print(f"  {status} {ticker}: {source} Sent={result.get('sentiment_score')}, Dur={result.get('duration_score')} — {result.get('reasoning', '')[:80]}")
         
-        return audit_map
+        return audit_map, source
     
     except json.JSONDecodeError as e:
         print(f"  ⚠️ Auditor returned invalid JSON: {e}")
@@ -381,8 +381,6 @@ Return ONLY the raw JSON array. No markdown, no code blocks."""
     except Exception as e:
         print(f"  ⚠️ API error: {e}")
         return None, "Error"
-
-    return audit_map, source
 
 
 def apply_consensus(signals, audit_map, kill_switch_threshold=0.35):
