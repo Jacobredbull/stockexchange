@@ -10,7 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pandas \
     python3-yaml \
     python3-requests \
-    python3-pytz \
     && rm -rf /var/lib/apt/lists/*
 
 # Step 2: Allow Python to see the apt-installed packages
