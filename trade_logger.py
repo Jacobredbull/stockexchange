@@ -1,4 +1,6 @@
+import glob
 import os
+import shutil
 import sqlite3
 import datetime
 
@@ -78,6 +80,32 @@ def init_db():
     
     conn.commit()
     conn.close()
+
+
+def backup_db(keep_last=7):
+    """
+    Creates a timestamped backup of the trade database in data/backups/.
+    Automatically removes old backups, keeping only the `keep_last` most recent.
+    Call this at the end of each trading session.
+    """
+    backup_dir = os.path.join(DB_DIR, 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
+
+    if not os.path.exists(DB_FILE):
+        print("⚠️  DB backup skipped: database file not found.")
+        return
+
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_path = os.path.join(backup_dir, f'trade_history_{timestamp}.db')
+    shutil.copy2(DB_FILE, backup_path)
+    print(f"💾  DB backed up → {backup_path}")
+
+    # Prune old backups, keep only the most recent `keep_last`
+    all_backups = sorted(glob.glob(os.path.join(backup_dir, 'trade_history_*.db')))
+    to_delete = all_backups[:-keep_last] if len(all_backups) > keep_last else []
+    for old in to_delete:
+        os.remove(old)
+        print(f"   🗑️  Removed old backup: {os.path.basename(old)}")
 
 
 def log_decision(decision_data):

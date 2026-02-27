@@ -200,6 +200,7 @@ def execute_trades():
         time.sleep(1) # Rate limit politeness
 
     print("\n--- Trading Session Complete ---")
+    trade_logger.backup_db()
 
 if __name__ == "__main__":
     execute_trades()
