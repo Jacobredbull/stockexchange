@@ -3,9 +3,15 @@
 # ─────────────────────────────────────────────
 FROM python:3.11-slim
 
-# System deps for pandas / numpy wheels on ARM64
+# System deps for compiling pandas / numpy wheels on ARM environments
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc libffi-dev && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    python3-dev \
+    pkg-config \
+    libffi-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
