@@ -2,9 +2,9 @@
 # stockexchange_V0.1 — Docker Compose (Pi 5)
 # ─────────────────────────────────────────────
 services:
-  antigravity:
+  stockexchange_v01:
     build: .
-    container_name: antigravity_v31
+    container_name: stockexchange_v01
     restart: always
     env_file: .env
     environment:
@@ -18,7 +18,7 @@ services:
       # Allow live .env updates without rebuild
       - ./.env:/app/.env:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "from supervisor import check_heartbeat; exit(0 if check_heartbeat(300) else 1)"]
+      test: [ "CMD", "python", "-c", "from supervisor import check_heartbeat; exit(0 if check_heartbeat(300) else 1)" ]
       interval: 120s
       timeout: 10s
       retries: 3
