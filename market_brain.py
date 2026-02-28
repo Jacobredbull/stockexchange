@@ -312,10 +312,10 @@ Return a JSON array with one object per signal, in the SAME ORDER:
 
 Return ONLY the raw JSON array. No markdown, no code blocks."""
 
-    @with_exponential_backoff(retries=3)
+    @with_exponential_backoff(retries=1)  # No retry on Gemini — fail fast, fall to DeepSeek
     def call_gemini():
         if not GEMINI_AVAILABLE or not config.GEMINI_API_KEY:
-            raise Exception("Gemini API key not configured")
+            raise Exception("Gemini not configured")
         client = genai.Client(api_key=config.GEMINI_API_KEY)
         response = client.models.generate_content(
             model=config.GEMINI_MODEL_NAME,
@@ -336,14 +336,20 @@ Return ONLY the raw JSON array. No markdown, no code blocks."""
 
     try:
         print(f"\n--- Consensus Audit: Reviewing Top {len(top_signals)} signals ---")
-        try:
-            content, source = call_gemini()
-        except Exception as e:
-            print(f"  ⚠️ Gemini Audit failed: {e}. Switching to DeepSeek-V3 Failover...")
+        
+        # Pre-flight: skip Gemini entirely if not configured — no retry delay
+        if not GEMINI_AVAILABLE or not getattr(config, 'GEMINI_API_KEY', None):
+            print("  ℹ️  Gemini unavailable — using DeepSeek directly (no delay).")
+            content, source = call_deepseek()
+        else:
             try:
-                content, source = call_deepseek()
-            except Exception as ds_e:
-                raise BrainPowerLossError(f"Both Gemini and DeepSeek failed for Auditor: {ds_e}")
+                content, source = call_gemini()
+            except Exception as e:
+                print(f"  ⚠️ Gemini Audit failed: {e}. Switching to DeepSeek-V3 Failover...")
+                try:
+                    content, source = call_deepseek()
+                except Exception as ds_e:
+                    raise BrainPowerLossError(f"Both Gemini and DeepSeek failed for Auditor: {ds_e}")
         
         # Clean up code blocks
         if content.startswith("```json"):
