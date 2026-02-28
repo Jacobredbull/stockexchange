@@ -31,13 +31,11 @@ RUN pip install --no-cache-dir --prefer-binary \
     --extra-index-url https://www.piwheels.org/simple \
     -r requirements.txt
 
-# 5. Install google-genai without its deps (avoids websockets version conflict)
-#    alpaca-trade-api requires websockets<11
-#    google-genai requires websockets>=13  →  conflict
-#    We only use REST calls (generate_content), not streaming WebSockets.
+# 5. Install google-generativeai (stable SDK, no websockets conflict with alpaca-trade-api)
 COPY requirements-genai.txt .
-RUN pip install --no-cache-dir --no-deps -r requirements-genai.txt
-RUN pip install --no-cache-dir --prefer-binary google-auth httpx pydantic
+RUN pip install --no-cache-dir --prefer-binary \
+    --extra-index-url https://www.piwheels.org/simple \
+    -r requirements-genai.txt
 
 # 6. Copy application code and create persistent data directories
 COPY . .
