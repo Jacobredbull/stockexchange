@@ -53,13 +53,12 @@ def _send_message(text: str, parse_mode: str = "Markdown"):
     if not _is_configured():
         return None
     try:
+        payload = {"chat_id": CHAT_ID, "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         resp = requests.post(
             f"{BASE_URL}/sendMessage",
-            json={
-                "chat_id": CHAT_ID,
-                "text": text,
-                "parse_mode": parse_mode,
-            },
+            json=payload,
             timeout=15,
         )
         if resp.status_code != 200:
@@ -297,9 +296,9 @@ def send_alert(message: str):
     _send_message(text)
 
 def send_emergency_alert(message: str):
-    """High-priority emergency alert."""
-    text = f"‼️ *stockexchange\\_V0\.1 — EMERGENCY*\n\n{message}"
-    _send_message(text)
+    """High-priority emergency alert — sent as plain text to avoid Markdown parse errors."""
+    text = f"\u203c\ufe0f stockexchange_V0.1 \u2014 EMERGENCY\n\n{message}"
+    _send_message(text, parse_mode=None)
 
 
 # ---------------------------------------------------------------------------
