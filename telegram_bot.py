@@ -293,12 +293,12 @@ def send_backup():
 
 def send_alert(message: str):
     """General purpose alert (errors, defense mode triggers, etc.)."""
-    text = f"🚨 *stockexchange_V0.1 Alert*\n\n{message}"
+    text = f"🚨 *stockexchange\\_V0\.1 Alert*\n\n{message}"
     _send_message(text)
 
 def send_emergency_alert(message: str):
     """High-priority emergency alert."""
-    text = f"‼️ *EMERGENCY ALERT*\n\n{message}"
+    text = f"‼️ *stockexchange\\_V0\.1 — EMERGENCY*\n\n{message}"
     _send_message(text)
 
 
