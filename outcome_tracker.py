@@ -10,7 +10,9 @@ Usage:
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-import alpaca_trade_api as tradeapi
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 import trade_logger
 
 load_dotenv()
@@ -19,40 +21,46 @@ load_dotenv()
 def get_api():
     api_key = os.getenv("ALPACA_API_KEY", "REPLACE_ME")
     secret_key = os.getenv("ALPACA_SECRET_KEY", "REPLACE_ME")
-    base_url = "https://paper-api.alpaca.markets"
     
     if "REPLACE" in api_key:
         print("❌ API Keys not configured.")
         return None
     
     try:
-        return tradeapi.REST(api_key, secret_key, base_url, api_version='v2')
+        return StockHistoricalDataClient(api_key, secret_key)
     except Exception as e:
         print(f"❌ Alpaca connection failed: {e}")
         return None
 
 
-def fetch_close_price(api, ticker, target_date):
+def fetch_close_price(data_client, ticker, target_date):
     """Fetches the closing price for a ticker on a specific date."""
     try:
-        start = target_date.strftime('%Y-%m-%d')
-        end = (target_date + timedelta(days=3)).strftime('%Y-%m-%d')  # Buffer for weekends
+        start = target_date
+        end = target_date + timedelta(days=3)  # Buffer for weekends
         
-        bars = api.get_bars(
-            ticker,
-            tradeapi.TimeFrame.Day,
+        req = StockBarsRequest(
+            symbol_or_symbols=ticker,
+            timeframe=TimeFrame.Day,
             start=start,
             end=end,
             limit=3,
             feed='iex'
-        ).df
+        )
+        bars_response = data_client.get_stock_bars(req)
+        bars = bars_response.df
         
         if bars.empty:
             return None
         
+        # Flatten multi-index if present
+        import pandas as pd
+        if isinstance(bars.index, pd.MultiIndex):
+            bars = bars.xs(ticker, level='symbol')
+        
         return float(bars['close'].iloc[0])
     except Exception as e:
-        print(f"  ⚠️ Could not fetch price for {ticker} on {start}: {e}")
+        print(f"  ⚠️ Could not fetch price for {ticker} on {target_date.strftime('%Y-%m-%d')}: {e}")
         return None
 
 

@@ -6,7 +6,7 @@ requests==2.32.5
 python-dotenv==1.2.1
 openai>=1.12.0
 httpx<0.28.0
-alpaca-trade-api==3.1.1
+alpaca-py>=0.8.0
 pandas_market_calendars==4.4.1
 pytz==2024.1
 # Note: google-genai is installed separately via requirements-genai.txt

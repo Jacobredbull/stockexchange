@@ -95,13 +95,12 @@ def _send_document(file_path: Path, caption: str = ""):
 def _get_portfolio_summary() -> dict:
     """Query Alpaca for current positions and P/L."""
     try:
-        import alpaca_trade_api as tradeapi
+        from alpaca.trading.client import TradingClient
         api_key = os.getenv("ALPACA_API_KEY", "")
         secret_key = os.getenv("ALPACA_SECRET_KEY", "")
-        api = tradeapi.REST(api_key, secret_key,
-                            "https://paper-api.alpaca.markets", api_version="v2")
-        account = api.get_account()
-        positions = api.list_positions()
+        client = TradingClient(api_key, secret_key, paper=True)
+        account = client.get_account()
+        positions = client.get_all_positions()
 
         holdings = []
         for p in positions:

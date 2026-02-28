@@ -1,7 +1,9 @@
 import json
 import os
 import time
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
 import config
 import trade_logger
 
@@ -11,15 +13,14 @@ def execute_trades():
     # 1. Setup Alpaca Connection
     api_key = os.getenv("ALPACA_API_KEY", "REPLACE_WITH_YOUR_KEY")
     secret_key = os.getenv("ALPACA_SECRET_KEY", "REPLACE_WITH_YOUR_SECRET")
-    base_url = "https://paper-api.alpaca.markets"
 
     if "REPLACE" in api_key:
         print("❌ Error: API Keys not set in environment or config.py.")
         return
 
     try:
-        api = tradeapi.REST(api_key, secret_key, base_url, api_version='v2')
-        account = api.get_account()
+        client = TradingClient(api_key, secret_key, paper=True)
+        account = client.get_account()
         print(f"✅ Connected to Alpaca. Account Status: {account.status}")
         print(f"   Buying Power: ${account.buying_power}")
     except Exception as e:
@@ -89,7 +90,7 @@ def execute_trades():
         # --- Anti-Short-Selling Check ---
         if action == 'sell':
             try:
-                position = api.get_position(ticker)
+                position = client.get_open_position(ticker)
                 current_qty = float(position.qty)
                 
                 if current_qty <= 0:
@@ -112,19 +113,12 @@ def execute_trades():
         try:
             order_type = order.get('order_type', 'market')
             limit_price = order.get('limit_price')
+            side = OrderSide.BUY if action.lower() == 'buy' else OrderSide.SELL
             
             # Alpaca: fractional shares MUST use market orders
             if is_fractional and order_type != 'market':
                 print(f"   ⚠️ Fractional qty detected — forcing market order (Alpaca requirement).")
                 order_type = 'market'
-            
-            submit_args = {
-                'symbol': ticker,
-                'qty': str(qty),  # Alpaca accepts string for fractional
-                'side': action,
-                'type': order_type,
-                'time_in_force': 'day'
-            }
             
             if order_type == 'limit' and limit_price:
                 # PATCH B: Dynamic Limit Price Buffer
@@ -134,13 +128,25 @@ def execute_trades():
                     limit_price = round(float(limit_price) * 0.995, 2)
                 else:
                     limit_price = round(float(limit_price) * 1.005, 2)
-                submit_args['limit_price'] = str(limit_price)
                 print(f"   🔒 Limit Order: ${limit_price:.2f} ({'↓0.5% buffer' if action == 'sell' else '↑0.5% buffer'})")
-            elif order_type == 'market':
+                order_request = LimitOrderRequest(
+                    symbol=ticker,
+                    qty=float(qty),
+                    side=side,
+                    time_in_force=TimeInForce.DAY,
+                    limit_price=limit_price
+                )
+            else:
                 print(f"   📊 Market Order: {qty_label}")
+                order_request = MarketOrderRequest(
+                    symbol=ticker,
+                    qty=float(qty),
+                    side=side,
+                    time_in_force=TimeInForce.DAY
+                )
 
-            submitted_order = api.submit_order(**submit_args)
-            alpaca_order_id = submitted_order.id
+            submitted_order = client.submit_order(order_request)
+            alpaca_order_id = str(submitted_order.id)
             print(f"   🚀 Order Submitted! ID: {alpaca_order_id}")
             print(f"      Status: {submitted_order.status}")
             
@@ -153,7 +159,7 @@ def execute_trades():
             time.sleep(5)
             
             try:
-                updated_order = api.get_order(alpaca_order_id)
+                updated_order = client.get_order_by_id(alpaca_order_id)
                 fill_status = updated_order.status
                 print(f"   📋 Order Status: {fill_status}")
                 

@@ -3,7 +3,10 @@ import os
 import math
 import pandas as pd
 import numpy as np
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.data.timeframe import TimeFrame
 import config
 import trade_logger  # [NEW] Import Logger
 from datetime import datetime, timedelta
@@ -26,14 +29,18 @@ class TradingLogic:
         # Alpaca Setup
         self.api_key = os.getenv("ALPACA_API_KEY", "REPLACE_ME")
         self.secret_key = os.getenv("ALPACA_SECRET_KEY", "REPLACE_ME")
-        self.base_url = "https://paper-api.alpaca.markets"
         
-        self.api = None
+        self.client = None
+        self.data_client = None
         if "REPLACE" not in self.api_key:
              try:
-                 self.api = tradeapi.REST(self.api_key, self.secret_key, self.base_url, api_version='v2')
+                 self.client = TradingClient(self.api_key, self.secret_key, paper=True)
+                 self.data_client = StockHistoricalDataClient(self.api_key, self.secret_key)
              except Exception as e:
                  print(f"Warning: Alpaca API failed to init: {e}")
+        
+        # keep self.api as alias so rest of code can check `if self.api`
+        self.api = self.client
         
         # Initialize Database
         trade_logger.init_db()
@@ -49,13 +56,13 @@ class TradingLogic:
         if ticker in self._ticker_cache:
             return self._ticker_cache[ticker]
         
-        if not self.api:
+        if not self.client:
             self._ticker_cache[ticker] = True  # Can't validate without API, assume OK
             return True
         
         try:
-            asset = self.api.get_asset(ticker)
-            is_valid = asset.tradable and asset.status == 'active'
+            asset = self.client.get_asset(ticker)
+            is_valid = asset.tradable and asset.status.value == 'active'
             self._ticker_cache[ticker] = is_valid
             if not is_valid:
                 print(f"  ❌ {ticker}: Asset exists but not tradable (status: {asset.status})")
@@ -72,14 +79,13 @@ class TradingLogic:
         price = None
         
         # 1. Try Alpaca
-        if self.api:
+        if self.data_client:
             try:
-                # Get last trade or quote
-                trade = self.api.get_latest_trade(ticker)
-                price = float(trade.price)
+                req = StockLatestQuoteRequest(symbol_or_symbols=ticker)
+                quote = self.data_client.get_stock_latest_quote(req)
+                price = float(quote[ticker].ask_price or quote[ticker].bid_price)
                 print(f"  [API] Fetched {ticker} price: ${price:.2f}")
             except Exception as e:
-                # print(f"  [API-Error] Could not fetch {ticker}: {e}")
                 pass
         
         # 2. Manual Fallback
@@ -102,31 +108,34 @@ class TradingLogic:
         Fetches historical daily bars for technical analysis.
         Returns a DataFrame with 'high', 'low', 'close' columns (needed for ATR).
         """
-        if not self.api:
+        if not self.data_client:
             return None
             
         try:
-            # Calculate start date
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=days*2) # Fetch extra days to account for weekends/holidays
+            start_date = end_date - timedelta(days=days*2)
             
-            bars = self.api.get_bars(
-                ticker,
-                tradeapi.TimeFrame.Day,
-                start=start_date.strftime('%Y-%m-%d'),
-                end=end_date.strftime('%Y-%m-%d'),
+            req = StockBarsRequest(
+                symbol_or_symbols=ticker,
+                timeframe=TimeFrame.Day,
+                start=start_date,
+                end=end_date,
                 limit=days,
-                feed='iex'  # [FIX] Use IEX for free paper trading data
-            ).df
+                feed='iex'
+            )
+            bars_response = self.data_client.get_stock_bars(req)
+            bars = bars_response.df
             
             if bars.empty:
                 return None
             
-            # Return full OHLC DataFrame (high, low, close) for ATR calculation
+            # Flatten multi-index if present
+            if isinstance(bars.index, pd.MultiIndex):
+                bars = bars.xs(ticker, level='symbol')
+            
             return bars[['high', 'low', 'close']]
             
         except Exception as e:
-            # print(f"  [TA-Error] Could not fetch history for {ticker}: {e}")
             return None
 
     def calculate_atr(self, ohlc_df, period=14):
@@ -424,9 +433,9 @@ class TradingLogic:
         cost_basis_total = 0.0
         current_holdings_data = {} # Map ticker -> {qty, avg_price, market_value}
         
-        if self.api:
+        if self.client:
             try:
-                positions = self.api.list_positions()
+                positions = self.client.get_all_positions()
                 for p in positions:
                     qty = float(p.qty)
                     avg_entry = float(p.avg_entry_price)

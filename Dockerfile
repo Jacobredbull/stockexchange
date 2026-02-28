@@ -25,19 +25,21 @@ RUN pip install --no-cache-dir --prefer-binary \
     --extra-index-url https://www.piwheels.org/simple \
     "numpy==1.26.4" "pandas==2.2.2"
 
-# 4. Install remaining packages (excluding google-genai)
+# 4. Install remaining packages (now includes alpaca-py which uses websockets>=10.4)
+#    alpaca-py has NO upper cap on websockets, fully compatible with google-genai
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefer-binary \
     --extra-index-url https://www.piwheels.org/simple \
     -r requirements.txt
 
-# 5. Install google-genai without transitive deps (avoids websockets conflict)
-#    alpaca-trade-api requires websockets<11
-#    google-genai requires websockets>=13  →  conflict if installed with deps
-#    libffi-dev (above) ensures cffi compiles for google-auth dependency
+# 5. Install google-genai — now works cleanly with alpaca-py!
+#    alpaca-py requires websockets>=10.4 (no upper limit)
+#    google-genai requires websockets>=13  → both satisfied by websockets 13+
+#    libffi-dev (above) ensures cffi/google-auth compiles on ARM
 COPY requirements-genai.txt .
-RUN pip install --no-cache-dir --no-deps -r requirements-genai.txt
-RUN pip install --no-cache-dir --prefer-binary google-auth httpx pydantic
+RUN pip install --no-cache-dir --prefer-binary \
+    --extra-index-url https://www.piwheels.org/simple \
+    -r requirements-genai.txt
 
 # 6. Copy application code and create persistent data directories
 COPY . .

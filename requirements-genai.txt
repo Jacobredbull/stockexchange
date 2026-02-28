@@ -1,5 +1,4 @@
-# Installed with --no-deps to avoid websockets version conflict:
-#   alpaca-trade-api requires websockets<11
-#   google-genai requires websockets>=13  →  irreconcilable conflict
-# We only use REST generate_content(), not streaming, so skipping websockets is safe.
-google-genai==0.3.0
+# google-genai (current active SDK, requires websockets>=13)
+# alpaca-py requires websockets>=10.4 (no upper cap) → COMPATIBLE!
+# No more --no-deps workaround needed since switching from alpaca-trade-api.
+google-genai
