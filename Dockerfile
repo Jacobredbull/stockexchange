@@ -1,40 +1,51 @@
 FROM python:3.11-slim-bookworm
 
 # 1. Build tools + runtime libs for numpy/pandas on ARM
-#    gcc/g++/gfortran: compile C extensions when no binary wheel exists
-#    libopenblas-dev/liblapack-dev: linear algebra backends for numpy
+#    gcc/g++/gfortran: C/Fortran compilers for building from source
+#    libopenblas-dev: BLAS/LAPACK backend (required by numpy)
+#    curl: needed for health checks / package downloads
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ gfortran \
     libopenblas-dev liblapack-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 2. Upgrade pip
-RUN pip install --upgrade pip
+# 2. Upgrade pip and install wheel/setuptools first
+#    (helps resolve build issues with older sdist packages on ARM)
+RUN pip install --upgrade pip setuptools wheel
 
-# 3. Install all packages except google-genai
-#    --prefer-binary: use pre-built wheels over sdist (key for ARM speed)
-#    piwheels.org: Raspberry Pi pre-compiled ARM wheels repository
+# 3. Install numpy and pandas first, separately
+#    These are the most problematic on ARM — installing them first gives
+#    pip a chance to pull pre-built wheels from piwheels before other
+#    packages declare their own numpy constraints.
+RUN pip install --no-cache-dir --prefer-binary \
+    --extra-index-url https://www.piwheels.org/simple \
+    "numpy==1.26.4" "pandas==2.2.2"
+
+# 4. Install remaining packages (excluding google-genai)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefer-binary \
     --extra-index-url https://www.piwheels.org/simple \
     -r requirements.txt
 
-# 4. Install google-genai without its deps (avoids websockets conflict)
-#    alpaca-trade-api needs websockets<11
-#    google-genai needs websockets>=13  →  irreconcilable conflict
-#    We only use google-genai's REST generate_content(), not streaming,
-#    so skipping websockets is safe.
+# 5. Install google-genai without its deps (avoids websockets version conflict)
+#    alpaca-trade-api requires websockets<11
+#    google-genai requires websockets>=13  →  conflict
+#    We only use REST calls (generate_content), not streaming WebSockets.
 COPY requirements-genai.txt .
 RUN pip install --no-cache-dir --no-deps -r requirements-genai.txt
 RUN pip install --no-cache-dir --prefer-binary google-auth httpx pydantic
 
-# 5. Copy application code and create persistent data directories
+# 6. Copy application code and create persistent data directories
 COPY . .
 RUN mkdir -p /app/logs /app/data
 
-# 6. Docker health check (file-based heartbeat written by supervisor.py)
+# 7. Verify all packages loaded correctly (build-time sanity check)
+RUN python build_check.py
+
+# 8. Docker health check (file-based heartbeat written by supervisor.py)
 HEALTHCHECK --interval=120s --timeout=10s --retries=3 \
     CMD python -c "from supervisor import check_heartbeat; exit(0 if check_heartbeat(300) else 1)"
 
