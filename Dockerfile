@@ -7,6 +7,7 @@ FROM python:3.11-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ gfortran \
     libopenblas-dev liblapack-dev \
+    libffi-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
