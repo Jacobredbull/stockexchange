@@ -21,7 +21,7 @@ def check(name, import_stmt, version_attr=None):
         errors.append(name)
 
 print(f"\n{'='*50}")
-print(f"  Antigravity — Package Check ({sys.platform})")
+print(f"  stockexchange_V0.1 — Package Check ({sys.platform})")
 print(f"  Python {sys.version}")
 print(f"{'='*50}")
 

@@ -293,7 +293,7 @@ def send_backup():
 
 def send_alert(message: str):
     """General purpose alert (errors, defense mode triggers, etc.)."""
-    text = f"🚨 *Antigravity Alert*\n\n{message}"
+    text = f"🚨 *stockexchange_V0.1 Alert*\n\n{message}"
     _send_message(text)
 
 def send_emergency_alert(message: str):

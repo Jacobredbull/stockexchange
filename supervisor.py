@@ -314,7 +314,7 @@ def main(dry_run: bool = False):
             import telegram_bot
             now_et = datetime.now(TZ_NY)
             telegram_bot.send_emergency_alert(
-                f"🚀 Antigravity supervisor started on Pi\n"
+                f"🚀 stockexchange_V0.1 supervisor started on Pi\n"
                 f"   Time (ET): {now_et.strftime('%Y-%m-%d %H:%M')}\n"
                 f"   Next session: Morning Guard at market open +15min"
             )
