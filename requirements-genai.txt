@@ -1,3 +1,5 @@
-# Installed separately to avoid websockets conflict with alpaca-trade-api.
-# google-generativeai (stable SDK) has no websockets dependency.
-google-generativeai>=0.8.0
+# Installed with --no-deps to avoid websockets version conflict:
+#   alpaca-trade-api requires websockets<11
+#   google-genai requires websockets>=13  →  irreconcilable conflict
+# We only use REST generate_content(), not streaming, so skipping websockets is safe.
+google-genai==0.3.0

@@ -6,13 +6,13 @@ from datetime import datetime
 from openai import OpenAI
 import config
 
-# Gemini SDK (Consensus Auditor) — stable google-generativeai SDK
+# Gemini SDK (Consensus Auditor) — google-genai (current active SDK)
 try:
-    import google.generativeai as genai
+    from google import genai
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-    print("⚠️ google-generativeai not installed. Gemini audit disabled.")
+    print("⚠️ google-genai not installed. Gemini audit disabled.")
 
 class BrainPowerLossError(Exception):
     pass
@@ -179,12 +179,12 @@ Return ONLY the raw JSON object. No markdown, no code blocks."""
     def call_gemini():
         if not GEMINI_AVAILABLE or not config.GEMINI_API_KEY:
             raise Exception("Gemini API key not configured")
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL_NAME,
-            generation_config=genai.GenerationConfig(temperature=0.0)
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=config.GEMINI_MODEL_NAME,
+            contents=MACRO_PROMPT,
+            config=genai.types.GenerateContentConfig(temperature=0.0)
         )
-        response = model.generate_content(MACRO_PROMPT)
         return response.text.strip(), "Gemini"
 
     @with_exponential_backoff(retries=3)
@@ -316,12 +316,12 @@ Return ONLY the raw JSON array. No markdown, no code blocks."""
     def call_gemini():
         if not GEMINI_AVAILABLE or not config.GEMINI_API_KEY:
             raise Exception("Gemini API key not configured")
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        model = genai.GenerativeModel(
-            model_name=config.GEMINI_MODEL_NAME,
-            generation_config=genai.GenerationConfig(temperature=0.0)
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=config.GEMINI_MODEL_NAME,
+            contents=AUDITOR_PROMPT,
+            config=genai.types.GenerateContentConfig(temperature=0.0)
         )
-        response = model.generate_content(AUDITOR_PROMPT)
         return response.text.strip(), "Gemini"
 
     @with_exponential_backoff(retries=3)

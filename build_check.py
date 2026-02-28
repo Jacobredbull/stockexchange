@@ -36,12 +36,12 @@ check("httpx",                   "httpx")
 check("pandas_market_calendars", "pandas_market_calendars")
 check("pytz",                    "pytz")
 
-# google-generativeai optional (stable SDK)
+# google-genai (current active SDK, replaces deprecated google-generativeai)
 try:
-    import google.generativeai as genai
-    print(f"  ✅  {'google-generativeai':30s} {getattr(genai, '__version__', 'installed')}")
+    from google import genai
+    print(f"  ✅  {'google-genai':30s} {getattr(genai, '__version__', 'installed')}")
 except ImportError as e:
-    print(f"  ⚠️   {'google-generativeai':30s} Not available (Gemini will fallback to DeepSeek)")
+    print(f"  ⚠️   {'google-genai':30s} Not available (Gemini will fallback to DeepSeek)")
 
 print(f"{'='*50}")
 if errors:
