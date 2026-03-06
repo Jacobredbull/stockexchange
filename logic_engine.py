@@ -868,6 +868,12 @@ def main():
             raw_data = json.load(f)
     except FileNotFoundError as e:
         print(f"Error loading sentiment_data.json: {e}")
+        # Write sentinel record so every session has at least one DB entry
+        trade_logger.init_db()
+        trade_logger.log_decision({
+            'ticker': 'SYSTEM', 'action': 'NO_DATA', 'price': 0,
+            'decision_reason': f'Pipeline skipped: {e}'
+        })
         return
 
     # current_portfolio.json is OPTIONAL — Alpaca API is the primary source

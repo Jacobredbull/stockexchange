@@ -109,45 +109,49 @@ def backup_db(keep_last=7):
 
 
 def log_decision(decision_data):
-    """Logs a decision from logic_engine.py. Returns the row ID."""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    
-    c.execute('''
-        INSERT INTO history (
-            timestamp, ticker, action, quantity, price, 
-            sentiment_score, duration_score, sentiment_reason, rsi_14, sma_20, decision_reason,
-            entry_price, exit_price, pnl, pnl_percent,
-            atr_14, sma_50, high_water_mark,
-            env_bias, macro_reason
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        datetime.datetime.now().isoformat(),
-        decision_data.get('ticker'),
-        decision_data.get('action'),
-        decision_data.get('quantity', 0),
-        decision_data.get('price'),
-        decision_data.get('sentiment_score'),
-        decision_data.get('duration_score', 0.0),
-        decision_data.get('sentiment_reason', ''),
-        decision_data.get('rsi_14'),
-        decision_data.get('sma_20'),
-        decision_data.get('decision_reason', ''),
-        decision_data.get('entry_price'),
-        decision_data.get('exit_price'),
-        decision_data.get('pnl'),
-        decision_data.get('pnl_percent'),
-        decision_data.get('atr_14'),
-        decision_data.get('sma_50'),
-        decision_data.get('high_water_mark'),
-        decision_data.get('env_bias'),
-        decision_data.get('macro_reason')
-    ))
-    
-    row_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    return row_id
+    """Logs a decision from logic_engine.py. Returns the row ID (-1 on failure)."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        c.execute('''
+            INSERT INTO history (
+                timestamp, ticker, action, quantity, price, 
+                sentiment_score, duration_score, sentiment_reason, rsi_14, sma_20, decision_reason,
+                entry_price, exit_price, pnl, pnl_percent,
+                atr_14, sma_50, high_water_mark,
+                env_bias, macro_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            datetime.datetime.now().isoformat(),
+            decision_data.get('ticker'),
+            decision_data.get('action'),
+            decision_data.get('quantity', 0),
+            decision_data.get('price'),
+            decision_data.get('sentiment_score'),
+            decision_data.get('duration_score', 0.0),
+            decision_data.get('sentiment_reason', ''),
+            decision_data.get('rsi_14'),
+            decision_data.get('sma_20'),
+            decision_data.get('decision_reason', ''),
+            decision_data.get('entry_price'),
+            decision_data.get('exit_price'),
+            decision_data.get('pnl'),
+            decision_data.get('pnl_percent'),
+            decision_data.get('atr_14'),
+            decision_data.get('sma_50'),
+            decision_data.get('high_water_mark'),
+            decision_data.get('env_bias'),
+            decision_data.get('macro_reason')
+        ))
+        
+        row_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+    except Exception as e:
+        print(f"  ⚠️ DB WRITE FAILED: {e} — Decision: {decision_data.get('ticker')} {decision_data.get('action')}")
+        return -1
 
 
 def update_execution(decision_id, order_id, status, filled_price=None, filled_qty=None, filled_at=None):
