@@ -313,10 +313,30 @@ def main(dry_run: bool = False):
         try:
             import telegram_bot
             now_et = datetime.now(TZ_NY)
+            # Determine actual next session based on current time
+            try:
+                today_str = now_et.strftime("%Y-%m-%d")
+                cal = mcal.get_calendar('NYSE')
+                sched = cal.schedule(start_date=today_str, end_date=today_str)
+                if len(sched) > 0:
+                    m_open = sched.iloc[0]['market_open'].astimezone(TZ_NY)
+                    m_close = sched.iloc[0]['market_close'].astimezone(TZ_NY)
+                    mg = m_open + timedelta(minutes=15)
+                    cs = m_close - timedelta(minutes=30)
+                    if now_et < mg:
+                        next_info = f"Morning Guard at {mg.strftime('%H:%M ET')}"
+                    elif now_et < cs:
+                        next_info = f"Closing Sprint at {cs.strftime('%H:%M ET')}"
+                    else:
+                        next_info = f"tomorrow ({next_trading_day()})"
+                else:
+                    next_info = f"next trading day ({next_trading_day()})"
+            except Exception:
+                next_info = "Morning Guard at market open +15min"
             telegram_bot.send_emergency_alert(
                 f"🚀 stockexchange_V0.1 supervisor started on Pi\n"
                 f"   Time (ET): {now_et.strftime('%Y-%m-%d %H:%M')}\n"
-                f"   Next session: Morning Guard at market open +15min"
+                f"   Next session: {next_info}"
             )
         except Exception as e:
             log.warning(f"Startup Telegram ping failed: {e}")

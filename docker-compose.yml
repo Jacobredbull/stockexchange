@@ -7,6 +7,9 @@ services:
     container_name: stockexchange_v01
     restart: always
     env_file: .env
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     environment:
       - TZ=America/New_York
       - PYTHONUNBUFFERED=1
