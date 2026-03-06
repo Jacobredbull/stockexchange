@@ -866,23 +866,29 @@ def main():
     try:
         with open('sentiment_data.json', 'r') as f:
             raw_data = json.load(f)
+    except FileNotFoundError as e:
+        print(f"Error loading sentiment_data.json: {e}")
+        return
+
+    # current_portfolio.json is OPTIONAL — Alpaca API is the primary source
+    # for live positions. This file is only a fallback for offline/mock mode.
+    try:
         with open('current_portfolio.json', 'r') as f:
             portfolio = json.load(f)
-        
-        # V3 FORMAT: Extract macro envelope
-        if isinstance(raw_data, dict) and 'signals' in raw_data:
-            env_bias = raw_data.get('global_env_bias', 1.0)
-            macro_reason = raw_data.get('macro_reason', '')
-            sentiment_data = raw_data['signals']
-        else:
-            # Backward-compatible: plain array (V2)
-            env_bias = 1.0
-            macro_reason = 'Legacy format (no macro data)'
-            sentiment_data = raw_data
-        
-    except FileNotFoundError as e:
-        print(f"Error loading input files: {e}")
-        return
+    except FileNotFoundError:
+        print("  ℹ️ current_portfolio.json not found — using Alpaca API for positions (normal).")
+        portfolio = {"positions": {}}
+    
+    # V3 FORMAT: Extract macro envelope
+    if isinstance(raw_data, dict) and 'signals' in raw_data:
+        env_bias = raw_data.get('global_env_bias', 1.0)
+        macro_reason = raw_data.get('macro_reason', '')
+        sentiment_data = raw_data['signals']
+    else:
+        # Backward-compatible: plain array (V2)
+        env_bias = 1.0
+        macro_reason = 'Legacy format (no macro data)'
+        sentiment_data = raw_data
 
     engine = TradingLogic(
         budget=config.TOTAL_BUDGET,
