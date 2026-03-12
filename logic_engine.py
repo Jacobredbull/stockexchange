@@ -12,19 +12,34 @@ import trade_logger  # [NEW] Import Logger
 from datetime import datetime, timedelta
 
 class TradingLogic:
-    def __init__(self, budget, risk_per_trade_percent, stop_loss_percent, max_concentration_percent):
-        self.budget = budget
-        self.risk_per_trade_percent = risk_per_trade_percent
-        self.stop_loss_percent = stop_loss_percent  # Kept as fallback
-        self.max_concentration_percent = max_concentration_percent
+    def __init__(self):
+        self.budget = config.TOTAL_BUDGET
         
-        # ATR-based stop config
-        self.atr_multiplier = 2.0
-        self.atr_period = 14
+        # Pillar 1: Slot-Based Execution
+        self.max_slots = config.MAX_SLOTS
         
-        # Trailing Take-Profit config
-        self.trailing_activation_pct = 0.10   # Activate after 10% unrealized gain
-        self.trailing_drop_pct = 0.03         # Trigger sell on 3% drop from peak
+        # Pillar 2: Volatility Moat
+        self.risk_per_trade_pct = config.RISK_PER_TRADE_PCT
+        self.atr_multiplier = config.ATR_MULTIPLIER
+        self.atr_period = config.ATR_PERIOD
+        self.max_volatility_pct = config.MAX_VOLATILITY_PCT
+        
+        # Pillar 3: Stop-Loss & Trailing
+        self.breakeven_trigger_pct = config.BREAKEVEN_TRIGGER_PCT
+        self.trailing_activation_pct = config.TRAILING_ACTIVATION_PCT
+        self.trailing_drop_pct = config.TRAILING_DROP_PCT
+        
+        # Pillar 4: Cost-Aware
+        self.min_order_value = config.MIN_ORDER_VALUE
+        
+        # Pillar 5: Incremental Swap
+        self.scout_replace_threshold = config.SCOUT_REPLACE_THRESHOLD
+        self.full_replace_threshold = config.FULL_REPLACE_THRESHOLD
+        self.scout_validation_sessions = config.SCOUT_VALIDATION_SESSIONS
+        self.scout_mercy_drop_pct = config.SCOUT_MERCY_DROP_PCT
+        
+        # Scoring
+        self.return_cap = config.RETURN_CAP
         
         # Alpaca Setup
         self.api_key = os.getenv("ALPACA_API_KEY", "REPLACE_ME")
@@ -47,6 +62,32 @@ class TradingLogic:
         
         # Ticker validation cache
         self._ticker_cache = {}
+
+
+    def calculate_weighted_score(self, bias, return_pct, atr, price):
+        """
+        Five Pillars scoring: 0.4*Bias + 0.3*cappedReturn + 0.3*(1-NormATR)
+        R3: Return% capped at RETURN_CAP to prevent moonshot bias.
+        """
+        capped_return = min(return_pct, self.return_cap) if return_pct > 0 else max(return_pct, -self.return_cap)
+        norm_atr = min(atr / price, 1.0) if price > 0 and atr > 0 else 1.0
+        return 0.4 * bias + 0.3 * capped_return + 0.3 * (1 - norm_atr)
+
+    def calculate_position_size(self, atr, price):
+        """
+        Pillar 2: ATR-based position sizing (2% Rule).
+        Qty = floor(BUDGET * 2% / (2 * ATR))
+        Returns 0 if volatility exceeds hard filter (8%).
+        """
+        if not atr or atr <= 0 or not price or price <= 0:
+            return 0
+        
+        # Hard Filter: too volatile
+        if atr / price > self.max_volatility_pct:
+            return 0
+        
+        raw_qty = (self.budget * self.risk_per_trade_pct) / (2 * atr)
+        return math.floor(raw_qty)
 
     def validate_ticker(self, ticker):
         """
@@ -220,30 +261,50 @@ class TradingLogic:
             sell_reason = None
             
             # ============================================================
-            # PRIORITY 1: ATR-Based Dynamic Stop-Loss & Zero-Loss Rule
+            # PILLAR 3: ATR-Based Stop-Loss + Breakeven + Trailing
             # ============================================================
             if atr_14 and atr_14 > 0:
                 stop_price = buy_price - (self.atr_multiplier * atr_14)
             else:
-                # Fallback: use config's fixed stop-loss percent
-                stop_price = buy_price * (1 - self.stop_loss_percent)
+                # Fallback: flat 8% stop if ATR unavailable
+                stop_price = buy_price * 0.92
             
-            # --- ZERO-LOSS RULE ---
-            # If unrealized gain > 5%, guarantee a +0.5% buffer on the stop
-            is_zero_loss_active = False
+            # --- BREAKEVEN RULE (P3) ---
+            # At +3% unrealized gain, move stop to entry price
+            is_breakeven_active = False
+            is_trailing_active = False
             if buy_price > 0:
                 unrealized_gain_pct = (current_price - buy_price) / buy_price
-                if unrealized_gain_pct > 0.05:
-                    zero_loss_stop = buy_price * 1.005
-                    if zero_loss_stop > stop_price:
-                        stop_price = zero_loss_stop
-                        is_zero_loss_active = True
+                
+                if unrealized_gain_pct >= self.trailing_activation_pct:
+                    # TRAILING STOP: 1.5% from peak (use recent high as proxy)
+                    peak_price = current_price  # Conservative: current = peak
+                    if ohlc is not None and 'high' in ohlc.columns and len(ohlc) >= 5:
+                        peak_price = max(float(ohlc['high'].iloc[-5:].max()), current_price)
+                    trailing_stop = peak_price * (1 - self.trailing_drop_pct)
+                    if trailing_stop > stop_price:
+                        stop_price = trailing_stop
+                        is_trailing_active = True
+                elif unrealized_gain_pct >= self.breakeven_trigger_pct:
+                    # BREAKEVEN: move stop to entry price
+                    if buy_price > stop_price:
+                        stop_price = buy_price
+                        is_breakeven_active = True
             
             if current_price < stop_price:
                 drop_pct = (1 - current_price / buy_price) * 100
-                if is_zero_loss_active:
+                if is_trailing_active:
+                    peak_price = current_price
+                    if ohlc is not None and 'high' in ohlc.columns and len(ohlc) >= 5:
+                        peak_price = max(float(ohlc['high'].iloc[-5:].max()), current_price)
+                    drop_from_peak = ((peak_price - current_price) / peak_price) * 100
                     sell_reason = (
-                        f"SELL: Protected Profit Stop hit (+0.5% Guaranteed) | "
+                        f"SELL: Trailing Stop hit ({drop_from_peak:.1f}% drop from peak ${peak_price:.2f}) | "
+                        f"Entry: ${buy_price:.2f} → Current: ${current_price:.2f} | Stop: ${stop_price:.2f}"
+                    )
+                elif is_breakeven_active:
+                    sell_reason = (
+                        f"SELL: Breakeven Stop hit | "
                         f"Entry: ${buy_price:.2f} → Current: ${current_price:.2f} | Stop: ${stop_price:.2f}"
                     )
                 elif atr_14:
@@ -256,36 +317,8 @@ class TradingLogic:
                     sell_reason = (
                         f"SELL: Hard Stop-Loss reached (-{drop_pct:.1f}%) | "
                         f"Entry: ${buy_price:.2f} → Current: ${current_price:.2f} | "
-                        f"Threshold: -{self.stop_loss_percent*100:.0f}% (ATR unavailable)"
+                        f"Threshold: 8% (ATR unavailable)"
                     )
-            
-            # ============================================================
-            # PRIORITY 2: Trailing Take-Profit (High Water Mark)
-            # Activates when unrealized gain > 10%, triggers on 3% drop from peak
-            # ============================================================
-            if sell_reason is None and buy_price > 0:
-                unrealized_gain_pct = (current_price - buy_price) / buy_price
-                
-                if unrealized_gain_pct > self.trailing_activation_pct:
-                    # Estimate High Water Mark from recent highs (last 5 trading days)
-                    high_water_mark = current_price  # default
-                    if ohlc is not None and 'high' in ohlc.columns and len(ohlc) >= 5:
-                        high_water_mark = float(ohlc['high'].iloc[-5:].max())
-                    
-                    # Also compare against current price (in case today is the peak)
-                    high_water_mark = max(high_water_mark, current_price)
-                    
-                    trailing_stop = high_water_mark * (1 - self.trailing_drop_pct)
-                    
-                    if current_price < trailing_stop:
-                        gain_pct = unrealized_gain_pct * 100
-                        drop_from_peak = ((high_water_mark - current_price) / high_water_mark) * 100
-                        sell_reason = (
-                            f"SELL: Trailing Profit Taken ({drop_from_peak:.1f}% drop from peak of ${high_water_mark:.2f}) | "
-                            f"Gain: +{gain_pct:.1f}% | Entry: ${buy_price:.2f} → Current: ${current_price:.2f}"
-                        )
-                    else:
-                        print(f"  📈 {ticker}: Trailing TP active (Gain +{unrealized_gain_pct*100:.1f}%, Peak ${high_water_mark:.2f}, Trail Stop ${trailing_stop:.2f})")
             
             # ============================================================
             # PRIORITY 3: Whipsaw-Protected Trend Breakdown
@@ -369,8 +402,10 @@ class TradingLogic:
                 if atr_14: ta_status += f" | ATR: {atr_14:.2f}"
                 
                 status_msg = f"  ✅ {ticker} safe. (Curr: ${current_price} > Stop: ${stop_price:.2f}"
-                if is_zero_loss_active:
-                    status_msg += " 🛡️ Protected Profit"
+                if is_trailing_active:
+                    status_msg += " 📈 Trailing Active"
+                elif is_breakeven_active:
+                    status_msg += " 🛡️ Breakeven Active"
                 status_msg += f"{ta_status})"
                 print(status_msg)
                 
@@ -387,478 +422,308 @@ class TradingLogic:
                 
         return sell_orders, total_proceeds
 
-    def generate_plan(self, sentiment_data, portfolio, env_bias=1.0, macro_reason=''):
+    def check_pending_swaps(self, current_holdings_data):
         """
-        Generates execution plan based on HOLISTIC Portfolio Management.
-        - Cost-Basis Budgeting (Gravity-Adjusted by env_bias)
-        - Global Ranking (Sentiment * Duration)
-        - Smart Partial Rebalancing (50% Swap)
-        - Real-Time Liquidity Recycling
-        - Defense Mode (env_bias < 0.5): Freeze buys, tighten stops
+        Pillar 5: Validate scout positions.
+        R1 Mercy Rule: auto-liquidate if score dropped >10% from entry.
         """
-        print("\n--- Generating Execution Plan (Holistic Manager) ---")
         orders = []
+        scouts = trade_logger.get_pending_scouts()
+        if not scouts:
+            return orders
         
-        # Store env context for logging
+        print("\n--- Pillar 5: Scout Validation ---")
+        for scout in scouts:
+            ticker = scout['ticker']
+            entry_score = scout.get('scout_entry_score', 0) or 0
+            sessions = trade_logger.count_sessions_since(scout['timestamp'])
+            
+            current_price = self.fetch_price(ticker)
+            if not current_price:
+                continue
+            
+            ohlc = self.fetch_history(ticker)
+            atr = self.calculate_atr(ohlc, self.atr_period) if ohlc is not None else None
+            scores = trade_logger.get_latest_scores(ticker)
+            holding = current_holdings_data.get(ticker, {})
+            avg_entry = holding.get('avg_entry', current_price)
+            return_pct = (current_price - avg_entry) / avg_entry if avg_entry > 0 else 0
+            current_score = self.calculate_weighted_score(scores['sentiment'], return_pct, atr or 0, current_price)
+            
+            # R1: Mercy Rule
+            if entry_score > 0 and current_score < entry_score * (1 - self.scout_mercy_drop_pct):
+                print(f"  ❌ MERCY RULE: {ticker} score {entry_score:.3f}→{current_score:.3f}. Liquidating.")
+                trade_logger.mark_scout_state(ticker, 'scout_failed')
+                qty = int(holding.get('qty', 0))
+                if qty > 0:
+                    sell_id = trade_logger.log_decision({
+                        'ticker': ticker, 'action': 'SELL', 'quantity': qty, 'price': current_price,
+                        'decision_reason': f'Mercy Rule: score {entry_score:.3f}→{current_score:.3f}',
+                        'weighted_score': current_score
+                    })
+                    orders.append({"ticker": ticker, "action": "sell", "quantity": qty,
+                        "order_type": "limit", "limit_price": current_price,
+                        "reason": "Scout Mercy Rule", "decision_id": sell_id})
+                continue
+            
+            if sessions < self.scout_validation_sessions:
+                print(f"  ⏳ {ticker}: Scout pending ({sessions}/{self.scout_validation_sessions} sessions)")
+                continue
+            
+            if current_score >= entry_score:
+                print(f"  ✅ SCOUT VALIDATED: {ticker} ({entry_score:.3f}→{current_score:.3f})")
+                trade_logger.mark_scout_state(ticker, 'pending_complete')
+            else:
+                print(f"  ⚠️ SCOUT WEAKENED: {ticker} ({entry_score:.3f}→{current_score:.3f}). Half-weight hold.")
+                trade_logger.mark_scout_state(ticker, 'scout_failed')
+        
+        return orders
+
+    def generate_plan(self, sentiment_data, portfolio, env_bias=1.0, macro_reason=''):
+        """Five Pillars Execution Plan Generator."""
+        print("\n--- Generating Execution Plan (Five Pillars v2.0) ---")
+        orders = []
         self._env_bias = env_bias
         self._macro_reason = macro_reason
         
-        # GRAVITY-ADJUSTED BUDGET
-        effective_budget = self.budget * env_bias
-        
-        # Defense Mode detection
         safe_hold_mode = (env_bias == 0.0)
         defense_mode = env_bias < 0.5
         self._panic_mode = env_bias < 0.3
         
         if safe_hold_mode:
-            print(f"  🚨 SAFE HOLD MODE ACTIVE (BRAIN OFFLINE)")
-            print(f"     Macro Reason: {macro_reason}")
-            print(f"     → All new buys STRICTLY FORBIDDEN")
-            print(f"     → Remaining defensively positioned")
-            self.atr_multiplier *= 0.5  # Max tightening
+            print(f"  🚨 SAFE HOLD MODE ACTIVE — Reason: {macro_reason}")
+            self.atr_multiplier *= 0.5
         elif defense_mode:
-            print(f"  🚨 DEFENSE MODE ACTIVE (env_bias={env_bias:.2f})")
-            print(f"     Macro Reason: {macro_reason}")
-            print(f"     → All new buys FROZEN")
-            print(f"     → ATR multiplier tightened by 30%")
-            # Tighten ATR stop by 30%
+            print(f"  🚨 DEFENSE MODE (env_bias={env_bias:.2f}) — Reason: {macro_reason}")
             self.atr_multiplier *= 0.7
-            
-        if self._panic_mode and not safe_hold_mode:
-            print(f"  💥 TOTAL PANIC MODE — Grace period OVERRIDDEN")
 
-        # 1. Calculate Cost-Basis Usage
-        # We need to query Alpaca for actual avg_entry_price to be accurate.
-        cost_basis_total = 0.0
-        current_holdings_data = {} # Map ticker -> {qty, avg_price, market_value}
-        
+        # ── 1. Fetch Positions ──
+        current_holdings_data = {}
         if self.client:
             try:
                 positions = self.client.get_all_positions()
                 for p in positions:
-                    qty = float(p.qty)
-                    avg_entry = float(p.avg_entry_price)
-                    market_val = float(p.market_value)
-                    
-                    cost_basis_total += (qty * avg_entry)
                     current_holdings_data[p.symbol] = {
-                        'qty': qty,
-                        'avg_entry': avg_entry,
-                        'market_value': market_val,
-                        'current_price': float(p.current_price)
+                        'qty': float(p.qty), 'avg_entry': float(p.avg_entry_price),
+                        'market_value': float(p.market_value), 'current_price': float(p.current_price)
                     }
             except Exception as e:
                 print(f"  ⚠️ Error fetching positions: {e}")
-                # Fallback to portfolio file if API fails (Mock mode)
                 for ticker, data in portfolio.get('positions', {}).items():
-                    cost_basis_total += (data['shares'] * data['buy_price'])
-                    current_holdings_data[ticker] = {
-                        'qty': data['shares'],
-                        'avg_entry': data['buy_price'],
-                    }
-
-        remaining_budget = effective_budget - cost_basis_total
-        print(f"  💰 Total Budget (Principal): ${self.budget:.2f}")
-        print(f"     Gravity-Adjusted Budget:  ${effective_budget:.2f} (×{env_bias:.2f})")
-        print(f"     Used (Cost Basis):        ${cost_basis_total:.2f}")
-        print(f"     Remaining (For Buys):     ${remaining_budget:.2f}")
-
-        # 2. Build Global Rank List
-        rank_list = []
+                    current_holdings_data[ticker] = {'qty': data['shares'], 'avg_entry': data['buy_price']}
         
-        # DEFENSE / SAFE_HOLD MODE: Skip all new buy signals
-        if defense_mode or safe_hold_mode:
-            mode_name = "SAFE HOLD MODE" if safe_hold_mode else "Defense Mode"
-            print(f"\n  🛡️ {mode_name}: Skipping all {len(sentiment_data)} new buy signals.")
-            trade_logger.log_decision({
-                'ticker': 'SYSTEM', 'action': 'DEFENSE_MODE', 'price': 0,
-                'sentiment_score': 0, 'duration_score': 0,
-                'decision_reason': f'{mode_name}: env_bias={env_bias:.2f}. All buys frozen. Reason: {macro_reason}',
-                'env_bias': env_bias, 'macro_reason': macro_reason
-            })
-        else:
-            # A. Add New Signals (normal mode)
-            for signal in sentiment_data:
-                if signal.get('action') == 'Buy':
-                    ticker = signal.get('ticker')
-                
-                    # Validate ticker exists on Alpaca before processing
-                    if not self.validate_ticker(ticker):
-                        trade_logger.log_decision({
-                            'ticker': ticker, 'action': 'SKIP', 'price': 0,
-                            'sentiment_score': signal.get('sentiment_score', 0),
-                            'duration_score': signal.get('duration_score', 0.5),
-                            'decision_reason': f'SKIP: Ticker {ticker} not found/tradable on Alpaca'
-                        })
-                        continue
-                
-                    # Rank = Sentiment * Duration
-                    sent_score = signal.get('sentiment_score', 0)
-                    dur_score = signal.get('duration_score', 0.5) # Default to mid if missing
-                    rank_score = sent_score * dur_score
-                
-                    rank_list.append({
-                        'ticker': ticker,
-                        'type': 'new_signal',
-                        'rank_score': rank_score,
-                        'sent_score': sent_score,
-                        'dur_score': dur_score,
-                        'price': self.fetch_price(ticker),
-                        'reason': signal.get('reasoning')
-                    })
+        num_positions = len([t for t, d in current_holdings_data.items() if d.get('qty', 0) > 0])
+        open_slots = max(0, self.max_slots - num_positions)
+        print(f"  📊 Slots: {num_positions}/{self.max_slots} used | {open_slots} open")
 
-        # B. Add Existing Holdings
-        for ticker, data in current_holdings_data.items():
-            if data['qty'] > 0:
-                # Fetch last known scores
-                scores = trade_logger.get_latest_scores(ticker)
-                last_sent = scores['sentiment']
-                last_dur = scores['duration']
-                rank_score = last_sent * last_dur
-                
-                current_price = self.fetch_price(ticker)
-                
-                rank_list.append({
-                    'ticker': ticker,
-                    'type': 'holding',
-                    'rank_score': rank_score,
-                    'sent_score': last_sent,
-                    'dur_score': last_dur,
-                    'price': current_price,
-                    'qty': data['qty'],
-                    'reason': "Existing Position"
-                })
+        # ── 2. P5: Check Pending Scouts ──
+        scout_orders = self.check_pending_swaps(current_holdings_data)
+        orders.extend(scout_orders)
+        sold_tickers = [o['ticker'] for o in scout_orders if o['action'] == 'sell']
 
-        # C. Rank by Rank_Score (Descending)
-        rank_list.sort(key=lambda x: x['rank_score'], reverse=True)
-        
-        print("\n--- Global Ranking (Top 5) [Score = Sent * Dur] ---")
-        for i, item in enumerate(rank_list[:5]):
-            print(f"  {i+1}. {item['ticker']} ({item['type']}) - Rank: {item['rank_score']:.3f} (S:{item['sent_score']:.1f} * D:{item['dur_score']:.1f})")
-
-        # 3. Risk Check (Force Sells & Technicals) - using LIVE data
-        #    Returns (sell_orders, total_proceeds) for liquidity recycling
+        # ── 3. P3: Risk Checks ──
         risk_sells, risk_proceeds = self.check_portfolio_risks(current_holdings_data)
         orders.extend(risk_sells)
-        
-        sold_tickers = [o['ticker'] for o in risk_sells]
-        
-        # LIQUIDITY RECYCLING: Add proceeds from risk sells to remaining budget
-        if risk_proceeds > 0:
-            remaining_budget += risk_proceeds
-            print(f"\n  💰 Liquidity Recycling: +${risk_proceeds:.2f} from risk sells → Available budget now ${remaining_budget:.2f}")
-        
-        # 4. Smart Execution (Swap & Buy)
-        
-        for item in rank_list:
-            if item['type'] != 'new_signal':
-                continue
-                
-            new_ticker = item['ticker']
-            new_rank = item['rank_score']
-            new_price = item['price']
-            
-            if not new_price: continue
+        # Recalculate open slots after sells
+        num_sold = len(set(sold_tickers))
+        open_slots = min(open_slots + num_sold, self.max_slots)
 
-            # --- PATCH A: Cooldown & Concentration Guard ---
-            # 1. 4-Hour Cooldown: Skip if traded recently
-            if trade_logger.is_on_cooldown(new_ticker, hours=4):
-                print(f"  ⏸️ Skipping {new_ticker}: On 4-hour cooldown (traded recently).")
-                trade_logger.log_decision({
-                    'ticker': new_ticker, 'action': 'SKIP', 'price': new_price,
-                    'sentiment_score': item['sent_score'], 'duration_score': item['dur_score'],
-                    'decision_reason': 'SKIP: 4-hour cooldown active'
-                })
-                continue
-            
-            # 2. Max Shares Per Ticker: Cap at TOTAL_BUDGET * MAX_CONCENTRATION / price
-            max_shares_for_ticker = math.floor(
-                (self.budget * self.max_concentration_percent) / new_price
-            )
-            current_held = current_holdings_data.get(new_ticker, {}).get('qty', 0)
-            current_held = int(current_held)
-            
-            if current_held >= max_shares_for_ticker:
-                print(f"  🚫 Skipping {new_ticker}: Already at max concentration ({current_held} shares, max {max_shares_for_ticker}).")
-                trade_logger.log_decision({
-                    'ticker': new_ticker, 'action': 'SKIP', 'price': new_price,
-                    'sentiment_score': item['sent_score'], 'duration_score': item['dur_score'],
-                    'decision_reason': f'SKIP: Max concentration reached ({current_held}/{max_shares_for_ticker} shares)'
-                })
-                continue
+        # ── 4. Defense Mode: Skip all buys ──
+        if defense_mode or safe_hold_mode:
+            mode_name = "SAFE HOLD" if safe_hold_mode else "Defense"
+            print(f"\n  🛡️ {mode_name}: All buys frozen.")
+            trade_logger.log_decision({
+                'ticker': 'SYSTEM', 'action': 'DEFENSE_MODE', 'price': 0,
+                'decision_reason': f'{mode_name}: env_bias={env_bias:.2f}. Reason: {macro_reason}',
+                'env_bias': env_bias, 'macro_reason': macro_reason
+            })
+            return orders
 
-            # Technical Filter (SYNCED with Risk Check criteria)
-            ohlc = self.fetch_history(new_ticker)
-            rsi = None
-            sma_20 = None
-            sma_50 = None
+        # ── 5. Score candidates (new signals) ──
+        candidates = []
+        for signal in sentiment_data:
+            if signal.get('action') != 'Buy':
+                continue
+            ticker = signal.get('ticker')
+            if not ticker or not self.validate_ticker(ticker):
+                trade_logger.log_decision({'ticker': ticker or 'UNKNOWN', 'action': 'SKIP', 'price': 0,
+                    'decision_reason': 'SKIP: Not tradable on Alpaca'})
+                continue
+            
+            bias = signal.get('sentiment_score', 0)
+            if trade_logger.is_blacklisted(ticker, current_bias=bias):
+                print(f"  🚫 {ticker}: 30-day blacklisted")
+                trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': 0,
+                    'sentiment_score': bias, 'decision_reason': 'SKIP: 30-day blacklist'})
+                continue
+            
+            price = self.fetch_price(ticker)
+            if not price:
+                continue
+            
+            ohlc = self.fetch_history(ticker)
+            atr = self.calculate_atr(ohlc, self.atr_period) if ohlc is not None else None
+            rsi, sma_20, sma_50 = None, None, None
             if ohlc is not None:
                 close_series = ohlc['close']
                 rsi = self.calculate_rsi(close_series, 14)
                 sma_20 = self.calculate_sma(close_series, 20)
                 sma_50 = self.calculate_sma(close_series, 50)
-                
-                # RSI filter (overbought)
-                if rsi > 75 or (rsi >= 65 and new_price <= sma_20): 
-                     skip_reason = f"SKIP BUY: Technicals weak (RSI {rsi:.1f})"
-                     print(f"  ⚠️ Skipping {new_ticker}: {skip_reason}")
-                     trade_logger.log_decision({
-                         'ticker': new_ticker,
-                         'action': 'SKIP',
-                         'price': new_price,
-                         'sentiment_score': item['sent_score'],
-                         'duration_score': item['dur_score'],
-                         'rsi_14': rsi,
-                         'sma_20': sma_20,
-                         'sma_50': sma_50,
-                         'decision_reason': skip_reason
-                     })
-                     continue
-                
-                # ENTRY FILTER: Whipsaw-Protected Trend Check (synced with risk check)
-                # Reject BUY if Price < SMA20 AND SMA20 < SMA50 (confirmed downtrend)
-                # OPTIMIZATION: Allow "Contrarian Entry" if Oversold OR High Conviction
-                if sma_20 and sma_50 and new_price < sma_20 and sma_20 < sma_50:
-                     gap_pct = ((sma_20 - new_price) / sma_20) * 100
-                     
-                     # Exception 1: Oversold (RSI < 35)
-                     is_oversold = (rsi is not None and rsi < 35)
-                     # Exception 2: High Conviction (Rank > 0.5)
-                     is_high_conviction = (new_rank >= 0.5)
-                     
-                     if is_oversold or is_high_conviction:
-                         why = "Oversold (RSI < 35)" if is_oversold else f"High Conviction (Rank {new_rank:.2f})"
-                         print(f"  📉 Contrarian Entry Accepted: {new_ticker} is in confirmed downtrend (gap {gap_pct:.1f}%) but {why}.")
-                     else:
-                         skip_reason = f"SKIP BUY: {new_ticker} in confirmed downtrend (Price ${new_price:.2f} < SMA20 ${sma_20:.2f} < SMA50 ${sma_50:.2f}, gap {gap_pct:.1f}%)"
-                         print(f"  🚫 {skip_reason}")
-                         trade_logger.log_decision({
-                             'ticker': new_ticker,
-                             'action': 'SKIP',
-                             'price': new_price,
-                             'sentiment_score': item['sent_score'],
-                             'duration_score': item['dur_score'],
-                             'rsi_14': rsi,
-                             'sma_20': sma_20,
-                             'sma_50': sma_50,
-                             'decision_reason': skip_reason
-                         })
-                         continue
-                elif sma_20 and not sma_50 and new_price < sma_20:
-                     # SMA50 unavailable: fall back to single-SMA check (original behavior)
-                     gap_pct = ((sma_20 - new_price) / sma_20) * 100
-                     is_oversold = (rsi is not None and rsi < 35)
-                     is_high_conviction = (new_rank >= 0.5)
-                     
-                     if is_oversold or is_high_conviction:
-                         why = "Oversold (RSI < 35)" if is_oversold else f"High Conviction (Rank {new_rank:.2f})"
-                         print(f"  📉 Contrarian Entry Accepted: {new_ticker} below SMA20 (gap {gap_pct:.1f}%, SMA50 N/A) but {why}.")
-                     else:
-                         skip_reason = f"SKIP BUY: {new_ticker} below SMA20 (Price ${new_price:.2f} < SMA20 ${sma_20:.2f}, gap {gap_pct:.1f}%, SMA50 unavailable)"
-                         print(f"  🚫 {skip_reason}")
-                         trade_logger.log_decision({
-                             'ticker': new_ticker,
-                             'action': 'SKIP',
-                             'price': new_price,
-                             'sentiment_score': item['sent_score'],
-                             'duration_score': item['dur_score'],
-                             'rsi_14': rsi,
-                             'sma_20': sma_20,
-                             'decision_reason': skip_reason
-                         })
-                         continue
             
-            target_trade_value = self.budget * self.risk_per_trade_percent
+            # P2: Volatility hard filter
+            if atr and price and atr / price > self.max_volatility_pct:
+                print(f"  🚫 {ticker}: Too volatile (ATR/Price={atr/price*100:.1f}%)")
+                trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                    'sentiment_score': bias, 'atr_14': atr,
+                    'decision_reason': f'SKIP: Volatility {atr/price*100:.1f}% > {self.max_volatility_pct*100:.0f}%'})
+                continue
             
-            # HYBRID FRACTIONAL/WHOLE SHARE LOGIC
-            raw_qty = target_trade_value / new_price
+            # RSI filter
+            if rsi is not None and (rsi > 75 or (rsi >= 65 and sma_20 and price <= sma_20)):
+                print(f"  ⚠️ {ticker}: RSI overbought ({rsi:.1f})")
+                trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                    'sentiment_score': bias, 'rsi_14': rsi,
+                    'decision_reason': f'SKIP: RSI {rsi:.1f}'})
+                continue
             
-            if raw_qty >= 1.0 and remaining_budget >= new_price:
-                # PRIMARY: Whole-share limit order
-                shares_to_buy = math.floor(raw_qty)
-                
-                # [OPTIMIZATION] Minimum 1 Share Rule
-                if shares_to_buy == 0:
-                    max_allowed_shares = math.floor((self.budget * self.max_concentration_percent) / new_price)
-                    if max_allowed_shares >= 1:
-                        shares_to_buy = 1
-                        print(f"  🔹 Upgrading trade to 1 share (Price ${new_price:.2f} > Target ${target_trade_value:.2f} but < Max Concen).")
-                
-                if shares_to_buy > 0:
-                     cost = shares_to_buy * new_price
-                     if cost > remaining_budget:
-                         shares_to_buy = math.floor(remaining_budget / new_price)
-                         cost = shares_to_buy * new_price
-                     
-                     if shares_to_buy > 0:
-                         remaining_budget -= cost
-                         buy_order_type = 'limit'
-                         reason = f"Holistic Buy (Rank {new_rank:.3f})."
-                         
-                         decision_id = trade_logger.log_decision({
-                            'ticker': new_ticker,
-                            'action': 'BUY',
-                            'quantity': shares_to_buy,
-                            'price': new_price,
-                            'sentiment_score': item['sent_score'],
-                            'duration_score': item['dur_score'],
-                            'rsi_14': rsi,
-                            'sma_20': sma_20,
-                            'sma_50': sma_50,
-                            'decision_reason': reason
-                         })
-                         
-                         orders.append({
-                            "ticker": new_ticker,
-                            "action": "buy",
-                            "quantity": shares_to_buy,
-                            "order_type": buy_order_type,
-                            "limit_price": new_price,
-                            "reason": reason,
-                            "decision_id": decision_id
-                         })
-                         print(f"  ✅ BUY {shares_to_buy} {new_ticker} (Limit ${new_price:.2f}) [DB#{decision_id}]")
-                         continue
-            
-            elif 0 < raw_qty < 1.0 and remaining_budget > 0 and remaining_budget < new_price:
-                # GAP-FILLER: Fractional share market order
-                frac_qty = round(remaining_budget / new_price, 4)
-                if frac_qty > 0:
-                    cost = frac_qty * new_price
-                    remaining_budget -= cost
-                    buy_order_type = 'market'
-                    reason = f"Fractional Gap-Fill (Rank {new_rank:.3f}, Qty {frac_qty})."
-                    
-                    decision_id = trade_logger.log_decision({
-                        'ticker': new_ticker,
-                        'action': 'BUY',
-                        'quantity': frac_qty,
-                        'price': new_price,
-                        'sentiment_score': item['sent_score'],
-                        'duration_score': item['dur_score'],
-                        'rsi_14': rsi,
-                        'sma_20': sma_20,
-                        'sma_50': sma_50,
-                        'decision_reason': reason
-                    })
-                    
-                    orders.append({
-                        "ticker": new_ticker,
-                        "action": "buy",
-                        "quantity": frac_qty,
-                        "order_type": buy_order_type,
-                        "reason": reason,
-                        "decision_id": decision_id
-                    })
-                    print(f"  ✅ BUY {frac_qty} {new_ticker} (Market, Fractional) [DB#{decision_id}]")
+            # Downtrend filter
+            if sma_20 and sma_50 and price < sma_20 and sma_20 < sma_50:
+                is_oversold = rsi is not None and rsi < 35
+                if not is_oversold:
+                    gap_pct = ((sma_20 - price) / sma_20) * 100
+                    print(f"  🚫 {ticker}: Downtrend (gap {gap_pct:.1f}%)")
+                    trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                        'sentiment_score': bias, 'rsi_14': rsi, 'sma_20': sma_20, 'sma_50': sma_50,
+                        'decision_reason': f'SKIP: Downtrend gap {gap_pct:.1f}%'})
                     continue
-
-            # Check 2: Swap Opportunity (50% Rule)
-            # Look for a holding that is significantly weaker (New > Old * 1.2)
-            # And STRICTLY enforce we only swap 50%
             
-            for potential_swap in reversed(rank_list):
-                if potential_swap['type'] == 'holding' and potential_swap['ticker'] not in sold_tickers:
-                    old_ticker = potential_swap['ticker']
-                    old_rank = potential_swap['rank_score']
-                    old_qty = potential_swap['qty']
-                    
-                    # Improvement Threshold: 20%
-                    # Handle low scores: if old_rank is 0, new_rank > 0.1 is enough
-                    threshold_met = False
-                    if old_rank <= 0.01:
-                        if new_rank > 0.1: threshold_met = True
-                    elif new_rank > (old_rank * 1.2):
-                        threshold_met = True
-                    
-                    if threshold_met:
-                        print(f"  🔄 Partial Swap: {new_ticker} ({new_rank:.3f}) >> {old_ticker} ({old_rank:.3f})")
-                        
-                        # Sell 50% of Old (FLOOR)
-                        swap_qty = math.floor(old_qty * 0.5)
-                        
-                        if swap_qty <= 0:
-                             print(f"     [Skip Swap] 50% of {old_ticker} (Qty: {old_qty}) is 0.")
-                             continue
-                        
-                        # LOGIC:
-                        # 1. Sell Swap Qty
-                        # 2. Use Proceeds to Buy New Ticker
-                        
-                        proceeds = swap_qty * potential_swap['price']
-                        
-                        # Sell Order
-                        sold_tickers.append(old_ticker)
-                        
-                        sell_decision_id = trade_logger.log_decision({
-                            'ticker': old_ticker,
-                            'action': 'SELL',
-                            'quantity': swap_qty,
-                            'price': potential_swap['price'],
-                            'decision_reason': f"Partial Swap for {new_ticker}"
-                        })
-                        
-                        orders.append({
-                            "ticker": old_ticker,
-                            "action": "sell",
-                            "quantity": swap_qty,
-                            "order_type": "limit",
-                            "limit_price": potential_swap['price'],
-                            "reason": f"Partial Swap for {new_ticker}",
-                            "decision_id": sell_decision_id
-                        })
-
-                        # Buy Order funded by swap proceeds
-                        # HYBRID: Swap buy quantity
-                        raw_swap_qty = proceeds / new_price
-                        
-                        if raw_swap_qty >= 1.0:
-                            shares_to_buy_swap = math.floor(raw_swap_qty)
-                            swap_order_type = 'limit'
-                        elif raw_swap_qty > 0:
-                            shares_to_buy_swap = round(raw_swap_qty, 4)
-                            swap_order_type = 'market'
-                        else:
-                            shares_to_buy_swap = 0
-                            swap_order_type = 'limit'
-                        
-                        if shares_to_buy_swap > 0:
-                            reason = f"Swap Buy via {old_ticker} (proceeds ${proceeds:.2f})."
-                            
-                            buy_decision_id = trade_logger.log_decision({
-                                'ticker': new_ticker,
-                                'action': 'BUY',
-                                'quantity': shares_to_buy_swap,
-                                'price': new_price,
-                                'sentiment_score': item['sent_score'],
-                                'duration_score': item['dur_score'],
-                                'decision_reason': reason
-                            })
-                            
-                            swap_buy_order = {
-                                "ticker": new_ticker,
-                                "action": "buy",
-                                "quantity": shares_to_buy_swap,
-                                "order_type": swap_order_type,
-                                "reason": reason,
-                                "decision_id": buy_decision_id
-                            }
-                            if swap_order_type == 'limit':
-                                swap_buy_order["limit_price"] = new_price
-                            orders.append(swap_buy_order)
-                            
-                            frac_label = f" (Market, Fractional)" if swap_order_type == 'market' else f" (Limit ${new_price:.2f})"
-                            print(f"     -> Selling {swap_qty} {old_ticker} to Buy {shares_to_buy_swap} {new_ticker}{frac_label}")
-                        
-                        # LIQUIDITY RECYCLING: Add leftover proceeds back to budget
-                        buy_cost = (shares_to_buy_swap * new_price) if shares_to_buy_swap > 0 else 0
-                        leftover = proceeds - buy_cost
-                        if leftover > 0:
-                            remaining_budget += leftover
-                            print(f"     💰 Recycled ${leftover:.2f} back to available budget (now ${remaining_budget:.2f})")
-                        
-                        break # One swap performed for this signal
+            score = self.calculate_weighted_score(bias, 0, atr or 0, price)
+            qty = self.calculate_position_size(atr or 0, price)
+            
+            candidates.append({
+                'ticker': ticker, 'score': score, 'price': price, 'qty': qty,
+                'bias': bias, 'atr': atr, 'rsi': rsi, 'sma_20': sma_20, 'sma_50': sma_50
+            })
+        
+        candidates.sort(key=lambda x: x['score'], reverse=True)
+        
+        # ── 6. Score existing holdings ──
+        holdings_scored = []
+        for ticker, data in current_holdings_data.items():
+            if data.get('qty', 0) <= 0 or ticker in sold_tickers:
+                continue
+            cp = data.get('current_price') or self.fetch_price(ticker)
+            ae = data.get('avg_entry', cp)
+            ret = (cp - ae) / ae if ae > 0 else 0
+            ohlc = self.fetch_history(ticker)
+            atr = self.calculate_atr(ohlc, self.atr_period) if ohlc is not None else None
+            scores = trade_logger.get_latest_scores(ticker)
+            sc = self.calculate_weighted_score(scores['sentiment'], ret, atr or 0, cp or 1)
+            holdings_scored.append({'ticker': ticker, 'score': sc, 'qty': data['qty'], 'price': cp, 'avg_entry': ae})
+        
+        holdings_scored.sort(key=lambda x: x['score'])
+        
+        print(f"\n--- Candidates: {len(candidates)} | Holdings: {len(holdings_scored)} ---")
+        for c in candidates[:5]:
+            print(f"  📈 {c['ticker']}: Score={c['score']:.3f} Qty={c['qty']} ${c['price']:.2f}")
+        for h in holdings_scored:
+            ret_pct = ((h['price']-h['avg_entry'])/h['avg_entry']*100) if h['avg_entry'] > 0 else 0
+            print(f"  📦 {h['ticker']}: Score={h['score']:.3f} Qty={int(h['qty'])} Ret={ret_pct:.1f}%")
+        
+        # ── 7. Execute: Fill slots → Replacements ──
+        for cand in candidates:
+            ticker, price, qty, score = cand['ticker'], cand['price'], cand['qty'], cand['score']
+            
+            if ticker in sold_tickers:
+                continue
+            if ticker in current_holdings_data and current_holdings_data[ticker].get('qty', 0) > 0:
+                continue
+            
+            # P4: Min order value
+            order_value = qty * price if qty > 0 else 0
+            if qty <= 0 or order_value < self.min_order_value:
+                print(f"  🚫 {ticker}: Order £{order_value:.0f} < min £{self.min_order_value:.0f}")
+                trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                    'sentiment_score': cand['bias'], 'weighted_score': score,
+                    'decision_reason': f'SKIP: Order £{order_value:.0f} < min £{self.min_order_value:.0f} (P4)'})
+                continue
+            
+            # OPEN SLOT
+            if open_slots > 0:
+                reason = f"Slot Fill (Score {score:.3f}, {qty} shares)"
+                did = trade_logger.log_decision({
+                    'ticker': ticker, 'action': 'BUY', 'quantity': qty, 'price': price,
+                    'sentiment_score': cand['bias'], 'rsi_14': cand.get('rsi'),
+                    'sma_20': cand.get('sma_20'), 'sma_50': cand.get('sma_50'),
+                    'atr_14': cand.get('atr'), 'decision_reason': reason, 'weighted_score': score
+                })
+                orders.append({"ticker": ticker, "action": "buy", "quantity": qty,
+                    "order_type": "limit", "limit_price": price, "reason": reason, "decision_id": did})
+                open_slots -= 1
+                print(f"  ✅ BUY {qty} {ticker} @ ${price:.2f} [DB#{did}]")
+                continue
+            
+            # ALL SLOTS FULL
+            if not holdings_scored:
+                break
+            weakest = holdings_scored[0]
+            ws = weakest['score']
+            
+            # P1: Full replacement (≥20%)
+            if ws <= 0.01 or score >= ws * self.full_replace_threshold:
+                print(f"  🔄 FULL REPLACE: {ticker}({score:.3f}) >> {weakest['ticker']}({ws:.3f})")
+                sq = int(weakest['qty'])
+                sid = trade_logger.log_decision({
+                    'ticker': weakest['ticker'], 'action': 'SELL', 'quantity': sq,
+                    'price': weakest['price'], 'weighted_score': ws,
+                    'decision_reason': f'Full Replace by {ticker} ({ws:.3f}→{score:.3f})'})
+                orders.append({"ticker": weakest['ticker'], "action": "sell", "quantity": sq,
+                    "order_type": "limit", "limit_price": weakest['price'],
+                    "reason": f"Full Replace by {ticker}", "decision_id": sid})
+                sold_tickers.append(weakest['ticker'])
+                
+                bid = trade_logger.log_decision({
+                    'ticker': ticker, 'action': 'BUY', 'quantity': qty, 'price': price,
+                    'sentiment_score': cand['bias'], 'atr_14': cand.get('atr'),
+                    'decision_reason': f'Full Replace of {weakest["ticker"]}', 'weighted_score': score})
+                orders.append({"ticker": ticker, "action": "buy", "quantity": qty,
+                    "order_type": "limit", "limit_price": price,
+                    "reason": f"Full Replace of {weakest['ticker']}", "decision_id": bid})
+                holdings_scored.pop(0)
+                print(f"  ✅ Sell {sq} {weakest['ticker']} → Buy {qty} {ticker}")
+                continue
+            
+            # P5: Scout swap (≥15%)
+            if ws <= 0.01 or score >= ws * self.scout_replace_threshold:
+                print(f"  🔍 SCOUT: {ticker}({score:.3f}) vs {weakest['ticker']}({ws:.3f})")
+                ssq = max(1, math.floor(weakest['qty'] * 0.5))
+                sid = trade_logger.log_decision({
+                    'ticker': weakest['ticker'], 'action': 'SELL', 'quantity': ssq,
+                    'price': weakest['price'], 'weighted_score': ws,
+                    'decision_reason': f'Scout Swap: 50% for {ticker}'})
+                orders.append({"ticker": weakest['ticker'], "action": "sell", "quantity": ssq,
+                    "order_type": "limit", "limit_price": weakest['price'],
+                    "reason": f"Scout Swap for {ticker}", "decision_id": sid})
+                
+                sbq = max(1, math.floor(qty * 0.5))
+                sov = sbq * price
+                if sov >= self.min_order_value:
+                    bid = trade_logger.log_decision({
+                        'ticker': ticker, 'action': 'BUY', 'quantity': sbq, 'price': price,
+                        'sentiment_score': cand['bias'], 'atr_14': cand.get('atr'),
+                        'decision_reason': f'Scout Entry via {weakest["ticker"]}',
+                        'weighted_score': score, 'swap_state': 'scout', 'scout_entry_score': score})
+                    orders.append({"ticker": ticker, "action": "buy", "quantity": sbq,
+                        "order_type": "limit", "limit_price": price,
+                        "reason": f"Scout Entry from {weakest['ticker']}", "decision_id": bid})
+                    print(f"  ✅ Sell {ssq} {weakest['ticker']} → Scout {sbq} {ticker}")
+                holdings_scored.pop(0)
+                continue
+            
+            print(f"  ⏭️ {ticker}: Score {score:.3f} < threshold for {weakest['ticker']} ({ws:.3f})")
+            trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                'sentiment_score': cand['bias'], 'weighted_score': score,
+                'decision_reason': f'SKIP: Below replacement threshold'})
 
         return orders
 
@@ -896,12 +761,7 @@ def main():
         macro_reason = 'Legacy format (no macro data)'
         sentiment_data = raw_data
 
-    engine = TradingLogic(
-        budget=config.TOTAL_BUDGET,
-        risk_per_trade_percent=config.RISK_PER_TRADE_PERCENT,
-        stop_loss_percent=config.STOP_LOSS_PERCENT,
-        max_concentration_percent=config.MAX_CONCENTRATION_PERCENT
-    )
+    engine = TradingLogic()
 
     plan = engine.generate_plan(sentiment_data, portfolio, env_bias=env_bias, macro_reason=macro_reason)
 

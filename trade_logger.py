@@ -3,6 +3,7 @@ import os
 import shutil
 import sqlite3
 import datetime
+import config
 
 DB_DIR = 'data'
 if not os.path.exists(DB_DIR):
@@ -29,6 +30,10 @@ _MIGRATIONS = [
     # v3: Macro-Environmental Observer columns
     'env_bias REAL',
     'macro_reason TEXT',
+    # v4: Five Pillars Framework
+    'weighted_score REAL',
+    'swap_state TEXT',         # NULL | scout | pending_complete | scout_failed
+    'scout_entry_score REAL',  # score at time of scout entry
 ]
 
 def init_db():
@@ -282,27 +287,32 @@ def get_decisions_for_review():
     } for r in rows]
 
 
-def is_on_cooldown(ticker, hours=4):
-    """Returns True if this ticker was traded (BUY/SELL) in the last `hours` hours."""
+def is_blacklisted(ticker, current_bias=None):
+    """Returns True if this ticker was SOLD in the last COOLDOWN_DAYS days.
+    R4: News Override — if current_bias >= BLACKLIST_OVERRIDE_BIAS, override."""
+    # R4: News Override
+    if current_bias is not None and current_bias >= config.BLACKLIST_OVERRIDE_BIAS:
+        return False
+    
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         
-        cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+        cutoff = (datetime.datetime.now() - datetime.timedelta(days=config.COOLDOWN_DAYS)).isoformat()
         
         c.execute('''
             SELECT COUNT(*) FROM history
             WHERE ticker = ? 
-              AND action = 'BUY'
+              AND action = 'SELL'
               AND timestamp > ?
-              AND (execution_status IS NULL OR execution_status != 'rejected')
+              AND (execution_status IS NULL OR execution_status NOT IN ('rejected', 'skipped_no_position'))
         ''', (ticker, cutoff))
         
         count = c.fetchone()[0]
         conn.close()
         return count > 0
     except Exception as e:
-        print(f"Error checking cooldown for {ticker}: {e}")
+        print(f"Error checking blacklist for {ticker}: {e}")
         return False
 
 
@@ -331,6 +341,57 @@ def get_last_buy_time(ticker):
     except Exception as e:
         print(f"Error fetching last buy time for {ticker}: {e}")
         return None
+
+
+def get_pending_scouts():
+    """Returns scout positions awaiting validation (Pillar 5)."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''
+            SELECT id, ticker, weighted_score, scout_entry_score, timestamp
+            FROM history
+            WHERE swap_state = 'scout'
+              AND action = 'BUY'
+            ORDER BY timestamp ASC
+        ''')
+        rows = c.fetchall()
+        conn.close()
+        return [{
+            'id': r[0], 'ticker': r[1],
+            'weighted_score': r[2], 'scout_entry_score': r[3],
+            'timestamp': r[4]
+        } for r in rows]
+    except Exception as e:
+        print(f"Error fetching pending scouts: {e}")
+        return []
+
+
+def mark_scout_state(ticker, new_state):
+    """Update swap_state for a scout ticker. States: 'pending_complete', 'scout_failed'."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''
+            UPDATE history SET swap_state = ?
+            WHERE ticker = ? AND swap_state = 'scout' AND action = 'BUY'
+        ''', (new_state, ticker))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error updating scout state for {ticker}: {e}")
+
+
+def count_sessions_since(timestamp_str):
+    """Count trading sessions (Morning Guard + Closing Sprint) since a timestamp."""
+    try:
+        entry_time = datetime.datetime.fromisoformat(str(timestamp_str))
+        now = datetime.datetime.now()
+        # Each trading day has 2 sessions; count elapsed days * 2
+        elapsed_days = (now - entry_time).days
+        return max(elapsed_days * 2, 0)
+    except Exception:
+        return 0
 
 
 if __name__ == '__main__':

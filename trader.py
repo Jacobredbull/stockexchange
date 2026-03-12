@@ -81,10 +81,24 @@ def execute_trades():
                     trade_logger.update_execution(decision_id, None, 'rejected_safe_hold_mode')
                 continue
 
-        # Detect fractional order
-        is_fractional = isinstance(qty, float) and qty < 1.0 and qty != int(qty)
-        qty_label = f"{qty} fractional shares" if is_fractional else f"{int(qty) if isinstance(qty, (int, float)) and qty == int(qty) else qty} shares"
-        print(f"\n📦 Preparing to {action.upper()} {qty_label} of {ticker}...")
+        # --- P4: Force Whole-Integer Quantities ---
+        qty = int(qty)  # Floor to whole shares
+        if qty <= 0:
+            print(f"   ⚠️ Skipping: Qty rounds to 0 after flooring.")
+            if decision_id:
+                trade_logger.update_execution(decision_id, None, 'skipped_qty_zero')
+            continue
+        
+        # P4: Minimum order value check
+        est_price = order.get('limit_price') or order.get('price') or 0
+        order_value = qty * float(est_price)
+        if action.lower() == 'buy' and order_value < config.MIN_ORDER_VALUE:
+            print(f"   ⚠️ Skipping: Order value £{order_value:.0f} < min £{config.MIN_ORDER_VALUE:.0f}")
+            if decision_id:
+                trade_logger.update_execution(decision_id, None, 'skipped_min_value')
+            continue
+        
+        print(f"\n📦 Preparing to {action.upper()} {qty} shares of {ticker}...")
         print(f"   Reason: {reason}")
         
         # --- Anti-Short-Selling Check ---
@@ -115,11 +129,7 @@ def execute_trades():
             limit_price = order.get('limit_price')
             side = OrderSide.BUY if action.lower() == 'buy' else OrderSide.SELL
             
-            # Alpaca: fractional shares MUST use market orders
-            if is_fractional and order_type != 'market':
-                print(f"   ⚠️ Fractional qty detected — forcing market order (Alpaca requirement).")
-                order_type = 'market'
-            
+            # P4: All orders are whole-share limit orders
             if order_type == 'limit' and limit_price:
                 # PATCH B: Dynamic Limit Price Buffer
                 # SELL: 0.5% below market → ensures fill in falling market
