@@ -10,7 +10,7 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 # Gemini Configuration (Consensus Auditor)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL_NAME = "gemini-3-flash-preview"
+GEMINI_MODEL_NAME = "gemini-2.5-flash"          # Stable tier — no more 503
 
 # RSS Feeds - Expanded for Global Coverage
 RSS_FEEDS = [
