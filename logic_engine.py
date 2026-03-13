@@ -629,6 +629,27 @@ class TradingLogic:
         for h in holdings_scored:
             ret_pct = ((h['price']-h['avg_entry'])/h['avg_entry']*100) if h['avg_entry'] > 0 else 0
             print(f"  📦 {h['ticker']}: Score={h['score']:.3f} Qty={int(h['qty'])} Ret={ret_pct:.1f}%")
+
+        # ── 6.5 Strict Slot Enforcement (Purge Excess) ──
+        # If we have more than MAX_SLOTS, sell the weakest ones until we are at MAX_SLOTS
+        excess_slots = len(holdings_scored) - self.max_slots
+        if excess_slots > 0:
+            print(f"\n  🧹 Slot Purge: {len(holdings_scored)} active > {self.max_slots} limit. Selling {excess_slots} weakest.")
+            for i in range(excess_slots):
+                weakest = holdings_scored.pop(0)  # Remove and get the lowest score
+                sq = int(weakest['qty'])
+                sid = trade_logger.log_decision({
+                    'ticker': weakest['ticker'], 'action': 'SELL', 'quantity': sq,
+                    'price': weakest['price'], 'weighted_score': weakest['score'],
+                    'decision_reason': f'Slot Purge: Enforcing max {self.max_slots} slots'})
+                orders.append({"ticker": weakest['ticker'], "action": "sell", "quantity": sq,
+                    "order_type": "limit", "limit_price": weakest['price'],
+                    "reason": f"Slot limit enforced ({self.max_slots})", "decision_id": sid})
+                sold_tickers.append(weakest['ticker'])
+                print(f"    ❌ Purged {weakest['ticker']} (Score: {weakest['score']:.3f})")
+            open_slots = 0  # We are exactly at max slots now
+        else:
+            open_slots = self.max_slots - len(holdings_scored)
         
         # ── 7. Execute: Fill slots → Replacements ──
         for cand in candidates:
