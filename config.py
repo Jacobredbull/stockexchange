@@ -55,7 +55,7 @@ Do not include markdown formatting (like ```json), just the raw JSON object.
 """
 
 # --- FIVE PILLARS RISK FRAMEWORK v2.0 ---
-TOTAL_BUDGET = 1000.0
+TOTAL_BUDGET = 5000.0
 
 # Pillar 1: Slot-Based Execution
 MAX_SLOTS = 3
@@ -75,7 +75,7 @@ TRAILING_ACTIVATION_PCT = 0.05     # Activate trail at +5%
 TRAILING_DROP_PCT = 0.015          # 1.5% trailing stop from peak
 
 # Pillar 4: Cost-Aware Execution
-MIN_ORDER_VALUE = 250.0            # £250 for £1k base
+MIN_ORDER_VALUE = 1000.0           # £1000 for £5k base
 
 # Pillar 5: Incremental Swap
 SCOUT_REPLACE_THRESHOLD = 1.15     # 15% higher = scout swap (50%)
