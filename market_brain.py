@@ -35,32 +35,58 @@ def with_exponential_backoff(retries=3):
     return decorator
 
 
-def fetch_rss_news(feed_urls):
+def fetch_rss_news(macro_feeds, tech_feeds):
     """
-    Fetches news from a list of RSS feed URLs.
+    Fetches news from Macro and Tech RSS feed URLs separately.
     """
-    articles = []
-    print(f"Fetching news from {len(feed_urls)} feeds...")
+    macro_articles = []
+    tech_articles = []
+    print(f"Fetching news from {len(macro_feeds)} Macro feeds and {len(tech_feeds)} Tech feeds...")
     
     # Set a custom User-Agent to prevent 503/403 blocks from CNBC, WSJ, etc.
     custom_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     feedparser.USER_AGENT = custom_agent
 
-    for url in feed_urls:
+    # 1. Fetch Macro Feeds (Uncapped)
+    for url in macro_feeds:
         try:
             feed = feedparser.parse(url)
-            print(f" - Parsed {len(feed.entries)} entries from {url}")
-            for entry in feed.entries[:20]: # Limit to 20 latest articles per feed
-                articles.append({
+            print(f" - Parsed {len(feed.entries)} entries from Macro: {url}")
+            for entry in feed.entries[:30]: # Allow deep macro visibility
+                macro_articles.append({
                     "title": entry.title,
                     "link": entry.link,
                     "summary": entry.summary if 'summary' in entry else entry.title,
                     "published": entry.published if 'published' in entry else str(datetime.now())
                 })
         except Exception as e:
-            print(f"Error parsing {url}: {e}")
+            print(f"Error parsing Macro {url}: {e}")
+
+    # 2. Fetch Tech Feeds (Top 10 max per feed initially)
+    for url in tech_feeds:
+        try:
+            feed = feedparser.parse(url)
+            print(f" - Parsed {len(feed.entries)} entries from Tech: {url}")
+            for entry in feed.entries[:10]:
+                tech_articles.append({
+                    "title": entry.title,
+                    "link": entry.link,
+                    "summary": entry.summary if 'summary' in entry else entry.title,
+                    "published": entry.published if 'published' in entry else str(datetime.now())
+                })
+        except Exception as e:
+            print(f"Error parsing Tech {url}: {e}")
             
-    return articles
+    # Cap Tech articles to 60 for efficiency. 
+    import random
+    MAX_TECH_ARTICLES = 60
+    
+    # Randomize tech articles so we get a good mix of Asia/Europe/US, not just the first one
+    if len(tech_articles) > MAX_TECH_ARTICLES:
+        tech_articles = random.sample(tech_articles, MAX_TECH_ARTICLES)
+        print(f"\n✅ Tech-Cap applied: Kept {len(macro_articles)} uncapped macro articles + randomized {MAX_TECH_ARTICLES} tech articles.")
+
+    return macro_articles, tech_articles
 
 
 def analyze_article(client, article):
@@ -475,14 +501,14 @@ def main():
     # ==========================================
     
     # 1. Fetch News
-    articles = fetch_rss_news(config.RSS_FEEDS)
-    if not articles:
+    macro_articles, tech_articles = fetch_rss_news(config.MACRO_FEEDS, config.TECH_FEEDS)
+    if not macro_articles and not tech_articles:
         print("No articles found to analyze.")
         return
 
-    # 2. Macro Assessment
+    # 2. Macro Assessment (Gemini sees ALL macro news)
     try:
-        global_env_bias, macro_reason, shadow_tickers, macro_source = assess_macro_environment(client, articles)
+        global_env_bias, macro_reason, shadow_tickers, macro_source = assess_macro_environment(client, macro_articles, top_n=50)
     except BrainPowerLossError as e:
         print(f"\n🚨 {e}")
         # SAFE_HOLD_MODE
@@ -506,12 +532,12 @@ def main():
     # STAGE 1: DeepSeek RSS Scan (Candidate Signals)
     # ==========================================
     
-    print(f"\nFound {len(articles)} articles. Starting Stage 1 (DeepSeek) analysis...")
+    print(f"\nFound {len(tech_articles)} Tech articles for signal scanning. Starting Stage 1 (DeepSeek)...")
     
     candidate_signals = []
 
-    for i, article in enumerate(articles):
-        print(f"Analyzing {i+1}/{len(articles)}: {article['title']}")
+    for i, article in enumerate(tech_articles):
+        print(f"Analyzing {i+1}/{len(tech_articles)}: {article['title']}")
         
         analysis = analyze_article(client, article)
         
