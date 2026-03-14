@@ -9,7 +9,7 @@
 | 文件 | 作用 | 何时运行 |
 |------|------|----------|
 | `config.py` | 所有配置参数（预算、止损%、API密钥、Telegram） | 不需要运行，被其他文件引用 |
-| `market_brain.py` | 宏观哨兵 + RSS抓取 → DeepSeek分析 → Gemini审核 → 输出 `sentiment_data.json` | **第1步** |
+| `market_brain.py` | 宏观哨兵 + RSS抓取(上限60条封顶防噪) → DeepSeek分析 → Gemini审核 → 输出 `sentiment_data.json` | **第1步** |
 | `logic_engine.py` | 重力调整引擎：读取情绪 + 宏观偏差 + Alpaca持仓 → 防御模式 + 恐慌覆盖 → `execution_plan.json` | **第2步** |
 | `trader.py` | 读取执行计划 → 提交Alpaca订单（支持分数股Market单） → 5秒轮询成交 → 回写DB | **第3步** |
 | `supervisor.py` | **24/7 调度器**：NYSE日历自动执行晨间/收盘会话 + 心跳 + 周五备份 | **Pi 5 自动运行** |
@@ -114,6 +114,11 @@ Gemini 分析头条新闻后，自动识别被间接影响的公司：
 - 银行丑闻 → JPM, GS, DB（间接曝险）
 - 石油危机 → DAL, FDX（成本冲击）
 - 网络攻击 → ICE（交易所曝险）
+
+### 📰 新闻截断与防噪控量 (Article Cap)
+为防止 LLM 在信息过载时产生高昂的 API 费用并降低“信噪比”，`market_brain.py` 内部实现了严格的控量逻辑：
+- **源头截断**：每个主流 RSS 数据源（涵盖 Google News、WSJ、TechCrunch 等十个源）最多只抓取最新的 `10` 条新闻，主动舍弃过期噪波。
+- **全局硬顶与随机采样**：系统单次独立分析总上限硬性封顶 `60` 条 (`MAX_ARTICLES = 60`)。若总量越线，系统自带**去极化随机抽样 (`random.sample`)**，确保每日送入 DeepSeek 的资讯配比极其均匀（宏观、科技、亚洲市场均有涉猎），防止前排源位霸屏。
 
 ---
 
