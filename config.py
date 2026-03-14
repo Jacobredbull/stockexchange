@@ -16,7 +16,7 @@ GEMINI_MODEL_NAME = "gemini-2.5-flash"          # Stable tier — no more 503
 RSS_FEEDS = [
     # Macro / Global Markets (For Environment Bias & Defense Mode)
     "https://finance.yahoo.com/news/rssindex",
-    "https://search.cnbc.com/rs/search/combinedcms/view.xml?id=100003114", # CNBC Top News
+    "https://news.google.com/rss/headlines/section/topic/BUSINESS", # Google News Business (Highly Reliable)
     "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", # WSJ Markets
     
     # US / Global Tech & AI
