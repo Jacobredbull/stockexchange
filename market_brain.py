@@ -42,6 +42,10 @@ def fetch_rss_news(feed_urls):
     articles = []
     print(f"Fetching news from {len(feed_urls)} feeds...")
     
+    # Set a custom User-Agent to prevent 503/403 blocks from CNBC, WSJ, etc.
+    custom_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    feedparser.USER_AGENT = custom_agent
+
     for url in feed_urls:
         try:
             feed = feedparser.parse(url)
