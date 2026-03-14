@@ -12,15 +12,20 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL_NAME = "gemini-2.5-flash"          # Stable tier — no more 503
 
-# RSS Feeds - Expanded for Global Coverage
+# RSS Feeds - Expanded for Global Coverage & Macro Awareness
 RSS_FEEDS = [
-    # US / Global
+    # Macro / Global Markets (For Environment Bias & Defense Mode)
+    "https://finance.yahoo.com/news/rssindex",
+    "https://search.cnbc.com/rs/search/combinedcms/view.xml?id=100003114", # CNBC Top News
+    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml", # WSJ Markets
+    
+    # US / Global Tech & AI
     "https://techcrunch.com/category/artificial-intelligence/feed/",
     "https://venturebeat.com/category/ai/feed/",
     "https://www.wired.com/feed/category/business/latest/rss",
     
     # Asia
-    "https://asia.nikkei.com/rss/feed/nar", # General Nikkei feed (Tech specific not always available via RSS, filtering by content)
+    "https://asia.nikkei.com/rss/feed/nar", # General Nikkei feed
     "https://www.techinasia.com/feed",
     
     # Europe
