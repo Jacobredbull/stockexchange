@@ -431,6 +431,62 @@ class TradingLogic:
                 
         return sell_orders, total_proceeds
 
+    def check_budget_overflow(self, holdings_data, env_bias):
+        """
+        Calculates if any existing position severely exceeds the Double Hard Capital Cap.
+        Automatically trims excess shares to return capital to the budget.
+        """
+        trim_orders = []
+        max_capital_per_slot = (self.budget / self.max_slots) * env_bias
+        
+        # Add a 15% tolerance buffer so natural profit growth doesn't trigger micro-selling
+        trim_threshold = max_capital_per_slot * 1.15
+        
+        print(f"\n--- Checking Budget Overflow (Cap: ${max_capital_per_slot:.2f}, Threshold: ${trim_threshold:.2f}) ---")
+        
+        for ticker, data in holdings_data.items():
+            shares = int(data.get('qty', 0))
+            if shares <= 0:
+                continue
+                
+            current_price = data.get('current_price') or self.fetch_price(ticker)
+            if not current_price:
+                continue
+                
+            market_value = shares * current_price
+            
+            # If the market value severely exceeds the allowed capital
+            if market_value > trim_threshold:
+                # Calculate how many shares to sell to get back to exactly max_capital_per_slot
+                excess_value = market_value - max_capital_per_slot
+                shares_to_sell = math.floor(excess_value / current_price)
+                
+                if shares_to_sell > 0:
+                    sell_reason = f"Budget Trim: Position Value ${market_value:.2f} exceeds cap ${max_capital_per_slot:.2f}. Trimming {shares_to_sell} shares."
+                    print(f"  ✂️ TRIM ALERT for {ticker}: {sell_reason}")
+                    
+                    sell_id = trade_logger.log_decision({
+                        'ticker': ticker,
+                        'action': 'SELL',
+                        'quantity': shares_to_sell,
+                        'price': current_price,
+                        'decision_reason': sell_reason
+                    })
+                    
+                    trim_orders.append({
+                        "ticker": ticker,
+                        "action": "sell",
+                        "quantity": shares_to_sell,
+                        "order_type": "market",  # Use market order for immediate trimming
+                        "reason": "Budget Trim (Overflow)",
+                        "decision_id": sell_id
+                    })
+                    
+                    # Prevent future logic in generate_plan from acting like we still hold these
+                    data['qty'] -= shares_to_sell
+                    
+        return trim_orders
+
     def check_pending_swaps(self, current_holdings_data):
         """
         Pillar 5: Validate scout positions.
@@ -536,6 +592,10 @@ class TradingLogic:
         # Recalculate open slots after sells
         num_sold = len(set(sold_tickers))
         open_slots = min(open_slots + num_sold, self.max_slots)
+
+        # ── 3.5 Automated Budget Overflow Trim ──
+        trim_orders = self.check_budget_overflow(current_holdings_data, env_bias)
+        orders.extend(trim_orders)
 
         # ── 4. Defense Mode: Skip all buys ──
         if defense_mode or safe_hold_mode:

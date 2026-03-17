@@ -147,7 +147,7 @@ def execute_trades():
                     limit_price=limit_price
                 )
             else:
-                print(f"   📊 Market Order: {qty_label}")
+                print(f"   📊 Market Order: {qty} shares")
                 order_request = MarketOrderRequest(
                     symbol=ticker,
                     qty=float(qty),
