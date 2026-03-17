@@ -73,11 +73,12 @@ class TradingLogic:
         norm_atr = min(atr / price, 1.0) if price > 0 and atr > 0 else 1.0
         return 0.4 * bias + 0.3 * capped_return + 0.3 * (1 - norm_atr)
 
-    def calculate_position_size(self, atr, price):
+    def calculate_position_size(self, atr, price, env_bias=1.0):
         """
-        Pillar 2: ATR-based position sizing (2% Rule).
-        Qty = floor(BUDGET * 2% / (2 * ATR))
-        Returns 0 if volatility exceeds hard filter (8%).
+        Pillar 2: ATR-based position sizing (2% Rule) + Hard Capital Cap.
+        Qty A = floor(BUDGET * 2% / (2 * ATR))
+        Qty B = floor((BUDGET / MAX_SLOTS * env_bias) / price)
+        Returns min(Qty A, Qty B), or 0 if volatility exceeds hard filter.
         """
         if not atr or atr <= 0 or not price or price <= 0:
             return 0
@@ -86,8 +87,16 @@ class TradingLogic:
         if atr / price > self.max_volatility_pct:
             return 0
         
-        raw_qty = (self.budget * self.risk_per_trade_pct) / (2 * atr)
-        return math.floor(raw_qty)
+        # Method A: ATR Risk Parity (Limit loss per trade to RISK_PER_TRADE_PCT)
+        atr_qty = (self.budget * self.risk_per_trade_pct) / (2 * atr)
+        
+        # Method B: Hard Capital Slot Cap (Scaled strictly by Gemini's Macro Bias)
+        slot_budget = (self.budget / self.max_slots) * env_bias
+        capital_qty = slot_budget / price
+        
+        # The system takes the MOST conservative (smallest) quantity
+        final_qty = min(atr_qty, capital_qty)
+        return math.floor(final_qty)
 
     def validate_ticker(self, ticker):
         """
@@ -598,7 +607,7 @@ class TradingLogic:
                     continue
             
             score = self.calculate_weighted_score(bias, 0, atr or 0, price)
-            qty = self.calculate_position_size(atr or 0, price)
+            qty = self.calculate_position_size(atr or 0, price, self._env_bias)
             
             candidates.append({
                 'ticker': ticker, 'score': score, 'price': price, 'qty': qty,
