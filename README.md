@@ -1,5 +1,7 @@
 # 🧠 stockexchange_V0.1 — AI Trading Brain
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 > Autonomous AI trading system with macro-environmental awareness, shadow linking, and 24/7 Raspberry Pi deployment.
 
 ---
@@ -104,9 +106,9 @@ python supervisor.py --dry-run   # 仅打印日程，不执行交易
 | 1.0 | 🟢 稳定 | 正常交易 |
 | 0.8 | 🟢 轻微关注 | 正常交易，预算微缩 |
 | 0.6 | 🟡 扰动 | 预算按比例缩减 |
-| 0.4 | 🟡 风险上升 | 预算缩减至40% |
-| < 0.5 | 🚨 **防御模式** | 冻结所有买入 + ATR止损收紧30% |
-| < 0.3 | 💥 **恐慌模式** | 防御模式 + 覆盖24小时宽限期 |
+| 0.4 | 🟡 风险上升 | **战争/地缘惩罚触发**：预算彻底缩减至40% |
+| < 0.5 | 🚨 **防御模式** | 冻结所有新仓位买入 + ATR止损收紧30% |
+| < 0.3 | 💥 **恐慌模式** | 防御模式 + 强制清仓最弱仓位 |
 
 ### 影子关联 (Shadow Linking)
 
@@ -115,10 +117,16 @@ Gemini 分析头条新闻后，自动识别被间接影响的公司：
 - 石油危机 → DAL, FDX（成本冲击）
 - 网络攻击 → ICE（交易所曝险）
 
-### 📰 新闻截断与防噪控量 (Article Cap)
-为防止 LLM 在信息过载时产生高昂的 API 费用并降低“信噪比”，`market_brain.py` 内部实现了严格的控量逻辑：
-- **源头截断**：每个主流 RSS 数据源（涵盖 Google News、WSJ、TechCrunch 等十个源）最多只抓取最新的 `10` 条新闻，主动舍弃过期噪波。
-- **全局硬顶与随机采样**：系统单次独立分析总上限硬性封顶 `60` 条 (`MAX_ARTICLES = 60`)。若总量越线，系统自带**去极化随机抽样 (`random.sample`)**，确保每日送入 DeepSeek 的资讯配比极其均匀（宏观、科技、亚洲市场均有涉猎），防止前排源位霸屏。
+### 📰 双轨制并线架构 (Dual-Feed Architecture)
+为防止 LLM 在信息过载时产生高达数倍的 API 费用，同时防止“AI 科技狂热”掩盖真实的宏观战争风险，系统采用了严格的双轨分离架构：
+
+1. **宏观上帝视角 (MACRO_FEEDS)**：
+   - 数据源：Yahoo Finance, WSJ, Google News Business
+   - **特点：不设上限 (Uncapped)**。系统将几十篇纯宏观新闻的标题全部发给 Gemini，且包含强制提示词 `CRITICAL WEIGHTING RULES`，确保任何**战争或严重地缘冲突**直接拥有一票否决权（强行打分至 0.4 或更低），触发全线防守。
+   
+2. **微观精算探针 (TECH_FEEDS)**：
+   - 数据源：TechCrunch, Wired, Nikkei, EU-Startups 等
+   - **特点：严格截断 (Capped at 60)**。所有的科技前沿资讯被打乱后，硬性截断在 60 条以内，发送给 DeepSeek 进行逐字深度剖析，只为寻找高胜率的选股信号 (Buy/Sell/Hold)。
 
 ---
 
