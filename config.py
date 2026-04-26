@@ -92,6 +92,28 @@ SCOUT_MERCY_DROP_PCT = 0.10        # R1: auto-liquidate if score drops >10%
 # Scoring
 RETURN_CAP = 0.10                  # R3: max Return% in scoring formula
 
+# --- GRADUATED RISK SCALING (replaces binary Defense Mode) ---
+# Each tier: (env_bias_threshold, max_slots_allowed, min_entry_score)
+# Applied in order: first matching tier wins (lowest bias first)
+RISK_TIERS = [
+    # env_bias < 0.3  → Critical: 1 slot, high bar
+    (0.3, 1, 0.70),
+    # env_bias < 0.5  → Elevated: 2 slots, moderate bar
+    (0.5, 2, 0.60),
+    # env_bias < 0.8  → Cautious: full slots, light bar
+    (0.8, 3, 0.50),
+    # env_bias >= 0.8 → Normal: full slots, minimal bar
+    (999, 3, 0.45),
+]
+ATR_MULTIPLIER_CRITICAL = 0.5      # ATR mult scale for Critical mode
+ATR_MULTIPLIER_ELEVATED = 0.7      # ATR mult scale for Elevated mode
+
+# --- STRATEGY OPTIMIZATIONS ---
+MOMENTUM_SMA_PERIOD = 5            # 5-day SMA for swap/replace momentum filter
+TIME_STOP_DAYS = 21                # Force-sell losing positions after N trading days
+RECOVERY_RAMP_SESSIONS = 3         # After defense exit, limit to 1 new slot for N sessions
+SENTIMENT_MAX_AGE_DAYS = 2         # Reject sentiment data older than N days
+
 # --- TELEGRAM MONITORING ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")

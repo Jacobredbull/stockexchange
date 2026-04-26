@@ -362,6 +362,20 @@ class TradingLogic:
                     gap_pct = ((sma_20 - current_price) / sma_20) * 100
                     print(f"  ⚠️ {ticker}: Price < SMA20 (gap {gap_pct:.1f}%) but SMA50 unavailable — Whipsaw protection: HOLDING.")
             
+            # ============================================================
+            # PRIORITY 4: Time Stop — force-sell losing positions held too long
+            # ============================================================
+            if sell_reason is None and buy_price > 0 and current_price < buy_price:
+                last_buy = trade_logger.get_last_buy_time(ticker)
+                if last_buy:
+                    days_held = (datetime.now() - last_buy).days
+                    if days_held >= config.TIME_STOP_DAYS:
+                        loss_pct = ((buy_price - current_price) / buy_price) * 100
+                        sell_reason = (
+                            f"SELL: Time Stop ({days_held}d held, -{loss_pct:.1f}% loss) | "
+                            f"Entry: ${buy_price:.2f} → Current: ${current_price:.2f}"
+                        )
+            
             # Calculate P&L for SELL
             pnl = (current_price - buy_price) * shares
             pnl_pct = ((current_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
@@ -545,22 +559,42 @@ class TradingLogic:
         return orders
 
     def generate_plan(self, sentiment_data, portfolio, env_bias=1.0, macro_reason=''):
-        """Five Pillars Execution Plan Generator."""
-        print("\n--- Generating Execution Plan (Five Pillars v2.0) ---")
+        """Five Pillars Execution Plan Generator (v2.1 — Graduated Risk Scaling)."""
+        print("\n--- Generating Execution Plan (Five Pillars v2.1) ---")
         orders = []
         self._env_bias = env_bias
         self._macro_reason = macro_reason
         
         safe_hold_mode = (env_bias == 0.0)
-        defense_mode = env_bias < 0.5
         self._panic_mode = env_bias < 0.3
+        
+        # ── Graduated Risk Scaling (replaces binary Defense Mode) ──
+        risk_scaled_slots = self.max_slots
+        min_entry_score = 0.45  # Default minimum
+        risk_label = "🟢 NORMAL"
         
         if safe_hold_mode:
             print(f"  🚨 SAFE HOLD MODE ACTIVE — Reason: {macro_reason}")
-            self.atr_multiplier *= 0.5
-        elif defense_mode:
-            print(f"  🚨 DEFENSE MODE (env_bias={env_bias:.2f}) — Reason: {macro_reason}")
-            self.atr_multiplier *= 0.7
+            self.atr_multiplier *= config.ATR_MULTIPLIER_CRITICAL
+        else:
+            for threshold, max_slots, min_score in config.RISK_TIERS:
+                if env_bias < threshold:
+                    risk_scaled_slots = max_slots
+                    min_entry_score = min_score
+                    break
+            
+            if env_bias < 0.3:
+                risk_label = "🔴 CRITICAL"
+                self.atr_multiplier *= config.ATR_MULTIPLIER_CRITICAL
+            elif env_bias < 0.5:
+                risk_label = "🟠 ELEVATED"
+                self.atr_multiplier *= config.ATR_MULTIPLIER_ELEVATED
+            elif env_bias < 0.8:
+                risk_label = "🟡 CAUTIOUS"
+        
+        print(f"  {risk_label} (env_bias={env_bias:.2f}) | Max Slots: {risk_scaled_slots} | Min Score: {min_entry_score:.2f}")
+        if macro_reason:
+            print(f"  📰 Macro: {macro_reason[:120]}")
 
         # ── 1. Fetch Positions ──
         current_holdings_data = {}
@@ -578,35 +612,42 @@ class TradingLogic:
                     current_holdings_data[ticker] = {'qty': data['shares'], 'avg_entry': data['buy_price']}
         
         num_positions = len([t for t, d in current_holdings_data.items() if d.get('qty', 0) > 0])
-        open_slots = max(0, self.max_slots - num_positions)
-        print(f"  📊 Slots: {num_positions}/{self.max_slots} used | {open_slots} open")
+        open_slots = max(0, min(risk_scaled_slots, self.max_slots) - num_positions)
+        print(f"  📊 Slots: {num_positions}/{self.max_slots} used | {open_slots} open (risk-adjusted max: {risk_scaled_slots})")
 
         # ── 2. P5: Check Pending Scouts ──
         scout_orders = self.check_pending_swaps(current_holdings_data)
         orders.extend(scout_orders)
         sold_tickers = [o['ticker'] for o in scout_orders if o['action'] == 'sell']
 
-        # ── 3. P3: Risk Checks ──
+        # ── 3. P3: Risk Checks (+ Time Stop) ──
         risk_sells, risk_proceeds = self.check_portfolio_risks(current_holdings_data)
         orders.extend(risk_sells)
         # Recalculate open slots after sells
         num_sold = len(set(sold_tickers))
-        open_slots = min(open_slots + num_sold, self.max_slots)
+        open_slots = min(open_slots + num_sold, risk_scaled_slots)
 
         # ── 3.5 Automated Budget Overflow Trim ──
         trim_orders = self.check_budget_overflow(current_holdings_data, env_bias)
         orders.extend(trim_orders)
 
-        # ── 4. Defense Mode: Skip all buys ──
-        if defense_mode or safe_hold_mode:
-            mode_name = "SAFE HOLD" if safe_hold_mode else "Defense"
-            print(f"\n  🛡️ {mode_name}: All buys frozen.")
+        # ── 4. Safe Hold: freeze all buys (only for env_bias == 0.0) ──
+        if safe_hold_mode:
+            print(f"\n  🚨 SAFE HOLD: All buys frozen.")
             trade_logger.log_decision({
                 'ticker': 'SYSTEM', 'action': 'DEFENSE_MODE', 'price': 0,
-                'decision_reason': f'{mode_name}: env_bias={env_bias:.2f}. Reason: {macro_reason}',
+                'decision_reason': f'SAFE HOLD: env_bias=0.00. Reason: {macro_reason}',
                 'env_bias': env_bias, 'macro_reason': macro_reason
             })
             return orders
+        
+        # Log risk tier for non-normal modes (for tracking)
+        if env_bias < 0.8:
+            trade_logger.log_decision({
+                'ticker': 'SYSTEM', 'action': 'RISK_SCALED', 'price': 0,
+                'decision_reason': f'{risk_label}: env_bias={env_bias:.2f}, slots={risk_scaled_slots}, min_score={min_entry_score:.2f}. Reason: {macro_reason}',
+                'env_bias': env_bias, 'macro_reason': macro_reason
+            })
 
         # ── 5. Score candidates (new signals) ──
         candidates = []
@@ -667,11 +708,24 @@ class TradingLogic:
                     continue
             
             score = self.calculate_weighted_score(bias, 0, atr or 0, price)
+            
+            # Min entry score filter (graduated by risk tier)
+            if score < min_entry_score:
+                print(f"  🚫 {ticker}: Score {score:.3f} < min {min_entry_score:.2f}")
+                trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                    'sentiment_score': bias, 'weighted_score': score,
+                    'decision_reason': f'SKIP: Score {score:.3f} < risk-tier min {min_entry_score:.2f}'})
+                continue
+            
             qty = self.calculate_position_size(atr or 0, price, self._env_bias)
+            
+            # Compute 5-day SMA for momentum filter (used in swap/replace decisions)
+            sma_5 = self.calculate_sma(ohlc['close'], config.MOMENTUM_SMA_PERIOD) if ohlc is not None and len(ohlc) >= config.MOMENTUM_SMA_PERIOD else None
             
             candidates.append({
                 'ticker': ticker, 'score': score, 'price': price, 'qty': qty,
-                'bias': bias, 'atr': atr, 'rsi': rsi, 'sma_20': sma_20, 'sma_50': sma_50
+                'bias': bias, 'atr': atr, 'rsi': rsi, 'sma_20': sma_20, 'sma_50': sma_50,
+                'sma_5': sma_5
             })
         
         candidates.sort(key=lambda x: x['score'], reverse=True)
@@ -759,6 +813,15 @@ class TradingLogic:
             weakest = holdings_scored[0]
             ws = weakest['score']
             
+            # Momentum filter: block swap/replace if target has negative 5-day momentum
+            sma_5 = cand.get('sma_5')
+            if sma_5 and price < sma_5:
+                print(f"  🚫 {ticker}: Negative 5d momentum (${price:.2f} < SMA5 ${sma_5:.2f}) — swap/replace blocked")
+                trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                    'sentiment_score': cand['bias'], 'weighted_score': score,
+                    'decision_reason': f'SKIP: Negative 5d momentum ${price:.2f} < SMA5 ${sma_5:.2f}'})
+                continue
+            
             # P1: Full replacement (≥20%)
             if ws <= 0.01 or score >= ws * self.full_replace_threshold:
                 print(f"  🔄 FULL REPLACE: {ticker}({score:.3f}) >> {weakest['ticker']}({ws:.3f})")
@@ -830,6 +893,23 @@ def main():
             'decision_reason': f'Pipeline skipped: {e}'
         })
         return
+    
+    # Staleness check: reject data older than SENTIMENT_MAX_AGE_DAYS
+    try:
+        file_mtime = datetime.fromtimestamp(os.path.getmtime('sentiment_data.json'))
+        data_age_days = (datetime.now() - file_mtime).days
+        if data_age_days > config.SENTIMENT_MAX_AGE_DAYS:
+            print(f"  ⚠️ sentiment_data.json is {data_age_days} days old (max: {config.SENTIMENT_MAX_AGE_DAYS})")
+            print(f"  🔄 Stale data — run market_brain.py first for fresh signals.")
+            trade_logger.init_db()
+            trade_logger.log_decision({
+                'ticker': 'SYSTEM', 'action': 'STALE_DATA', 'price': 0,
+                'decision_reason': f'Sentiment data {data_age_days}d old > max {config.SENTIMENT_MAX_AGE_DAYS}d. Skipping.'
+            })
+            return
+        print(f"  ✅ Sentiment data age: {data_age_days}d (max: {config.SENTIMENT_MAX_AGE_DAYS}d)")
+    except Exception as e:
+        print(f"  ⚠️ Could not check data age: {e}")
 
     # current_portfolio.json is OPTIONAL — Alpaca API is the primary source
     # for live positions. This file is only a fallback for offline/mock mode.
