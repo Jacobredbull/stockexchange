@@ -234,12 +234,19 @@ def send_summary(session_name: str = "Session", success: bool = True):
     lines.append(f"*📦 Execution*")
     lines.append(f"  Orders: {execution['total']} (Buy: {execution['buys']}, Sell: {execution['sells']})")
 
-    # Defense mode warning
-    if bias < 0.5:
+    # Risk Scaling Warning
+    if bias == 0.0:
         lines.append("")
-        lines.append("⚠️ *DEFENSE MODE ACTIVE* — All buys frozen, ATR tightened 30%")
-        if bias < 0.3:
-            lines.append("💥 *PANIC MODE* — Grace period overridden")
+        lines.append("🚨 *SAFE HOLD MODE ACTIVE* — All buys frozen, ATR tightened 50%")
+    elif bias < 0.3:
+        lines.append("")
+        lines.append("🔴 *CRITICAL RISK* — Max Slots: 1, Min Score: 0.70, ATR tightened 50%")
+    elif bias < 0.5:
+        lines.append("")
+        lines.append("🟠 *ELEVATED RISK* — Max Slots: 2, Min Score: 0.60, ATR tightened 30%")
+    elif bias < 0.8:
+        lines.append("")
+        lines.append("🟡 *CAUTIOUS RISK* — Max Slots: 3, Min Score: 0.50")
 
     text = "\n".join(lines)
     _send_message(text)

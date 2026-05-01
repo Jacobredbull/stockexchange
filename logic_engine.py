@@ -783,13 +783,14 @@ class TradingLogic:
             if ticker in current_holdings_data and current_holdings_data[ticker].get('qty', 0) > 0:
                 continue
             
-            # P4: Min order value
+            # P4: Min order value (Scaled by env_bias to avoid blocking trades during low-bias periods)
             order_value = qty * price if qty > 0 else 0
-            if qty <= 0 or order_value < self.min_order_value:
-                print(f"  🚫 {ticker}: Order £{order_value:.0f} < min £{self.min_order_value:.0f}")
+            scaled_min_order_value = self.min_order_value * self._env_bias
+            if qty <= 0 or order_value < scaled_min_order_value:
+                print(f"  🚫 {ticker}: Order £{order_value:.0f} < min £{scaled_min_order_value:.0f}")
                 trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
                     'sentiment_score': cand['bias'], 'weighted_score': score,
-                    'decision_reason': f'SKIP: Order £{order_value:.0f} < min £{self.min_order_value:.0f} (P4)'})
+                    'decision_reason': f'SKIP: Order £{order_value:.0f} < min £{scaled_min_order_value:.0f} (P4)'})
                 continue
             
             # OPEN SLOT
