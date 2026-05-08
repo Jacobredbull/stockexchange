@@ -501,63 +501,6 @@ class TradingLogic:
                     
         return trim_orders
 
-    def check_pending_swaps(self, current_holdings_data):
-        """
-        Pillar 5: Validate scout positions.
-        R1 Mercy Rule: auto-liquidate if score dropped >10% from entry.
-        """
-        orders = []
-        scouts = trade_logger.get_pending_scouts()
-        if not scouts:
-            return orders
-        
-        print("\n--- Pillar 5: Scout Validation ---")
-        for scout in scouts:
-            ticker = scout['ticker']
-            entry_score = scout.get('scout_entry_score', 0) or 0
-            sessions = trade_logger.count_sessions_since(scout['timestamp'])
-            
-            current_price = self.fetch_price(ticker)
-            if not current_price:
-                continue
-            
-            ohlc = self.fetch_history(ticker)
-            atr = self.calculate_atr(ohlc, self.atr_period) if ohlc is not None else None
-            scores = trade_logger.get_latest_scores(ticker)
-            holding = current_holdings_data.get(ticker, {})
-            avg_entry = holding.get('avg_entry', current_price)
-            return_pct = (current_price - avg_entry) / avg_entry if avg_entry > 0 else 0
-            current_score = self.calculate_weighted_score(scores['sentiment'], return_pct, atr or 0, current_price)
-            
-            # R1: Mercy Rule
-            if entry_score > 0 and current_score < entry_score * (1 - self.scout_mercy_drop_pct):
-                print(f"  ❌ MERCY RULE: {ticker} score {entry_score:.3f}→{current_score:.3f}. Liquidating.")
-                trade_logger.mark_scout_state(ticker, 'scout_failed')
-                qty = int(holding.get('qty', 0))
-                if qty > 0:
-                    sell_id = trade_logger.log_decision({
-                        'ticker': ticker, 'action': 'SELL', 'quantity': qty, 'price': current_price,
-                        'decision_reason': f'Mercy Rule: score {entry_score:.3f}→{current_score:.3f}',
-                        'weighted_score': current_score
-                    })
-                    orders.append({"ticker": ticker, "action": "sell", "quantity": qty,
-                        "order_type": "limit", "limit_price": current_price,
-                        "reason": "Scout Mercy Rule", "decision_id": sell_id})
-                continue
-            
-            if sessions < self.scout_validation_sessions:
-                print(f"  ⏳ {ticker}: Scout pending ({sessions}/{self.scout_validation_sessions} sessions)")
-                continue
-            
-            if current_score >= entry_score:
-                print(f"  ✅ SCOUT VALIDATED: {ticker} ({entry_score:.3f}→{current_score:.3f})")
-                trade_logger.mark_scout_state(ticker, 'pending_complete')
-            else:
-                print(f"  ⚠️ SCOUT WEAKENED: {ticker} ({entry_score:.3f}→{current_score:.3f}). Half-weight hold.")
-                trade_logger.mark_scout_state(ticker, 'scout_failed')
-        
-        return orders
-
     def generate_plan(self, sentiment_data, portfolio, env_bias=1.0, macro_reason=''):
         """Five Pillars Execution Plan Generator (v2.1 — Graduated Risk Scaling)."""
         print("\n--- Generating Execution Plan (Five Pillars v2.1) ---")
@@ -575,7 +518,7 @@ class TradingLogic:
         
         if safe_hold_mode:
             print(f"  🚨 SAFE HOLD MODE ACTIVE — Reason: {macro_reason}")
-            self.atr_multiplier *= config.ATR_MULTIPLIER_CRITICAL
+            self.atr_multiplier = config.ATR_MULTIPLIER * config.ATR_MULTIPLIER_CRITICAL
         else:
             for threshold, max_slots, min_score in config.RISK_TIERS:
                 if env_bias < threshold:
@@ -585,10 +528,10 @@ class TradingLogic:
             
             if env_bias < 0.3:
                 risk_label = "🔴 CRITICAL"
-                self.atr_multiplier *= config.ATR_MULTIPLIER_CRITICAL
+                self.atr_multiplier = config.ATR_MULTIPLIER * config.ATR_MULTIPLIER_CRITICAL
             elif env_bias < 0.5:
                 risk_label = "🟠 ELEVATED"
-                self.atr_multiplier *= config.ATR_MULTIPLIER_ELEVATED
+                self.atr_multiplier = config.ATR_MULTIPLIER * config.ATR_MULTIPLIER_ELEVATED
             elif env_bias < 0.8:
                 risk_label = "🟡 CAUTIOUS"
         
@@ -615,17 +558,20 @@ class TradingLogic:
         open_slots = max(0, min(risk_scaled_slots, self.max_slots) - num_positions)
         print(f"  📊 Slots: {num_positions}/{self.max_slots} used | {open_slots} open (risk-adjusted max: {risk_scaled_slots})")
 
-        # ── 2. P5: Check Pending Scouts ──
-        scout_orders = self.check_pending_swaps(current_holdings_data)
-        orders.extend(scout_orders)
-        sold_tickers = [o['ticker'] for o in scout_orders if o['action'] == 'sell']
-
         # ── 3. P3: Risk Checks (+ Time Stop) ──
         risk_sells, risk_proceeds = self.check_portfolio_risks(current_holdings_data)
         orders.extend(risk_sells)
-        # Recalculate open slots after sells
-        num_sold = len(set(sold_tickers))
-        open_slots = min(open_slots + num_sold, risk_scaled_slots)
+        
+        # ── 3.1 FIX: State Leak Prevention ──
+        # Immediately remove sold tickers from holdings so they don't block slots or appear in further logic
+        for order in risk_sells:
+            ticker = order['ticker']
+            if ticker in current_holdings_data:
+                del current_holdings_data[ticker]
+                
+        # Recalculate slots cleanly
+        num_positions = len([t for t, d in current_holdings_data.items() if d.get('qty', 0) > 0])
+        open_slots = max(0, risk_scaled_slots - num_positions)
 
         # ── 3.5 Automated Budget Overflow Trim ──
         trim_orders = self.check_budget_overflow(current_holdings_data, env_bias)
@@ -754,25 +700,30 @@ class TradingLogic:
             print(f"  📦 {h['ticker']}: Score={h['score']:.3f} Qty={int(h['qty'])} Ret={ret_pct:.1f}%")
 
         # ── 6.5 Strict Slot Enforcement (Purge Excess) ──
-        # If we have more than MAX_SLOTS, sell the weakest ones until we are at MAX_SLOTS
-        excess_slots = len(holdings_scored) - self.max_slots
+        # If we have more than risk_scaled_slots, sell the weakest ones until we are at risk_scaled_slots
+        excess_slots = len(holdings_scored) - risk_scaled_slots
         if excess_slots > 0:
-            print(f"\n  🧹 Slot Purge: {len(holdings_scored)} active > {self.max_slots} limit. Selling {excess_slots} weakest.")
+            print(f"\n  🧹 Slot Purge: {len(holdings_scored)} active > {risk_scaled_slots} risk-adjusted limit. Selling {excess_slots} weakest.")
             for i in range(excess_slots):
                 weakest = holdings_scored.pop(0)  # Remove and get the lowest score
                 sq = int(weakest['qty'])
                 sid = trade_logger.log_decision({
                     'ticker': weakest['ticker'], 'action': 'SELL', 'quantity': sq,
                     'price': weakest['price'], 'weighted_score': weakest['score'],
-                    'decision_reason': f'Slot Purge: Enforcing max {self.max_slots} slots'})
+                    'decision_reason': f'Slot Purge: Enforcing risk-scaled max {risk_scaled_slots} slots'})
                 orders.append({"ticker": weakest['ticker'], "action": "sell", "quantity": sq,
                     "order_type": "limit", "limit_price": weakest['price'],
-                    "reason": f"Slot limit enforced ({self.max_slots})", "decision_id": sid})
-                sold_tickers.append(weakest['ticker'])
+                    "reason": f"Slot limit enforced ({risk_scaled_slots})", "decision_id": sid})
+                # Prevent this ticker from blocking buys later
+                if weakest['ticker'] in current_holdings_data:
+                    del current_holdings_data[weakest['ticker']]
                 print(f"    ❌ Purged {weakest['ticker']} (Score: {weakest['score']:.3f})")
             open_slots = 0  # We are exactly at max slots now
         else:
-            open_slots = self.max_slots - len(holdings_scored)
+            open_slots = risk_scaled_slots - len(holdings_scored)
+        
+        # Keep track of sold tickers for replacement logic
+        sold_tickers = [o['ticker'] for o in orders if o['action'] == 'sell']
         
         # ── 7. Execute: Fill slots → Replacements ──
         for cand in candidates:
@@ -845,33 +796,6 @@ class TradingLogic:
                     "reason": f"Full Replace of {weakest['ticker']}", "decision_id": bid})
                 holdings_scored.pop(0)
                 print(f"  ✅ Sell {sq} {weakest['ticker']} → Buy {qty} {ticker}")
-                continue
-            
-            # P5: Scout swap (≥15%)
-            if ws <= 0.01 or score >= ws * self.scout_replace_threshold:
-                print(f"  🔍 SCOUT: {ticker}({score:.3f}) vs {weakest['ticker']}({ws:.3f})")
-                ssq = max(1, math.floor(weakest['qty'] * 0.5))
-                sid = trade_logger.log_decision({
-                    'ticker': weakest['ticker'], 'action': 'SELL', 'quantity': ssq,
-                    'price': weakest['price'], 'weighted_score': ws,
-                    'decision_reason': f'Scout Swap: 50% for {ticker}'})
-                orders.append({"ticker": weakest['ticker'], "action": "sell", "quantity": ssq,
-                    "order_type": "limit", "limit_price": weakest['price'],
-                    "reason": f"Scout Swap for {ticker}", "decision_id": sid})
-                
-                sbq = max(1, math.floor(qty * 0.5))
-                sov = sbq * price
-                if sov >= self.min_order_value:
-                    bid = trade_logger.log_decision({
-                        'ticker': ticker, 'action': 'BUY', 'quantity': sbq, 'price': price,
-                        'sentiment_score': cand['bias'], 'atr_14': cand.get('atr'),
-                        'decision_reason': f'Scout Entry via {weakest["ticker"]}',
-                        'weighted_score': score, 'swap_state': 'scout', 'scout_entry_score': score})
-                    orders.append({"ticker": ticker, "action": "buy", "quantity": sbq,
-                        "order_type": "limit", "limit_price": price,
-                        "reason": f"Scout Entry from {weakest['ticker']}", "decision_id": bid})
-                    print(f"  ✅ Sell {ssq} {weakest['ticker']} → Scout {sbq} {ticker}")
-                holdings_scored.pop(0)
                 continue
             
             print(f"  ⏭️ {ticker}: Score {score:.3f} < threshold for {weakest['ticker']} ({ws:.3f})")

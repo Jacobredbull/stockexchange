@@ -78,13 +78,19 @@ def fetch_rss_news(macro_feeds, tech_feeds):
             print(f"Error parsing Tech {url}: {e}")
             
     # Cap Tech articles to 60 for efficiency. 
-    import random
     MAX_TECH_ARTICLES = 60
     
-    # Randomize tech articles so we get a good mix of Asia/Europe/US, not just the first one
+    # Sort tech articles by published date (newest first) to ensure deterministic behavior
     if len(tech_articles) > MAX_TECH_ARTICLES:
-        tech_articles = random.sample(tech_articles, MAX_TECH_ARTICLES)
-        print(f"\n✅ Tech-Cap applied: Kept {len(macro_articles)} uncapped macro articles + randomized {MAX_TECH_ARTICLES} tech articles.")
+        try:
+            from dateutil import parser
+            tech_articles.sort(key=lambda x: parser.parse(x['published']), reverse=True)
+        except Exception:
+            # Fallback to standard string sort if parsing fails
+            tech_articles.sort(key=lambda x: x['published'], reverse=True)
+            
+        tech_articles = tech_articles[:MAX_TECH_ARTICLES]
+        print(f"\n✅ Tech-Cap applied: Kept {len(macro_articles)} uncapped macro articles + deterministically kept newest {MAX_TECH_ARTICLES} tech articles.")
 
     return macro_articles, tech_articles
 
@@ -476,11 +482,9 @@ def apply_consensus(signals, audit_map, kill_switch_threshold=0.35):
             print(f"  ✅ {ticker}: Consensus={sig['consensus_level']} | Final Sent={sig['sentiment_score']}, Dur={sig['duration_score']} | Delta={delta:.2f}")
             consensus_signals.append(sig)
         else:
-            # Not in top N, unaudited — keep DeepSeek score
-            sig['consensus_level'] = 'unverified'
-            sig['model_delta'] = None
-            sig['gemini_scores'] = None
-            consensus_signals.append(sig)
+            # Not in top N, unaudited — explicitly discard for live trading safety
+            print(f"  🗑️  DISCARDED: {ticker} (Unverified - outside top 10 audit pool)")
+            continue
     
     return consensus_signals
 
@@ -567,11 +571,11 @@ def main():
         return
 
     # ==========================================
-    # STAGE 2: Consensus Audit (Top 5)
+    # STAGE 2: Consensus Audit (Top 10)
     # ==========================================
     
     try:
-        audit_map, audit_source = audit_signals(client, candidate_signals, top_n=5)
+        audit_map, audit_source = audit_signals(client, candidate_signals, top_n=10)
     except BrainPowerLossError as e:
         print(f"\n🚨 {e}")
         # SAFE_HOLD_MODE

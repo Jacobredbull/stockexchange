@@ -7,7 +7,7 @@ set -e
 
 LOG_FILE="/tmp/stockexchange_build.log"
 
-echo "🔄 Fetching latest stockexchange_V0.1 updates..."
+echo "🔄 Fetching latest stockexchange_V0.4 updates..."
 git pull origin main
 
 echo "🔨 Building Docker image (logging to $LOG_FILE)..."

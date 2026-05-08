@@ -1,4 +1,4 @@
-# 🧠 stockexchange_V0.1 — AI Trading Brain
+# 🧠 stockexchange_V0.4 — AI Trading Brain
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

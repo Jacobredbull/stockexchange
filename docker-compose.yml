@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────
-# stockexchange_V0.1 — Docker Compose (Pi 5)
+# stockexchange_V0.4 — Docker Compose (Pi 5)
 # ─────────────────────────────────────────────
 services:
   stockexchange_v01:

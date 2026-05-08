@@ -1,5 +1,5 @@
 """
-stockexchange_V0.1 — Supervisor (NYSE-Aware Scheduler)
+stockexchange_V0.4 — Supervisor (NYSE-Aware Scheduler)
 
 Handles two trading sessions per day:
   Session 1 (Morning Guard):  market_open  + 15 min
@@ -303,7 +303,7 @@ def _run_loop(dry_run: bool):
 
 def main(dry_run: bool = False):
     log.info("=" * 60)
-    log.info("stockexchange_V0.1 Supervisor — Starting")
+    log.info("stockexchange_V0.4 Supervisor — Starting")
     check_db_integrity()
     log.info(f"  Timezone: {TZ_NY} | DST active: {bool(datetime.now(TZ_NY).dst())}")
     log.info("=" * 60)
@@ -334,7 +334,7 @@ def main(dry_run: bool = False):
             except Exception:
                 next_info = "Morning Guard at market open +15min"
             telegram_bot.send_emergency_alert(
-                f"🚀 stockexchange_V0.1 supervisor started on Pi\n"
+                f"🚀 stockexchange_V0.4 supervisor started on Pi\n"
                 f"   Time (ET): {now_et.strftime('%Y-%m-%d %H:%M')}\n"
                 f"   Next session: {next_info}"
             )
@@ -367,7 +367,7 @@ def main(dry_run: bool = False):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="stockexchange_V0.1 Supervisor")
+    parser = argparse.ArgumentParser(description="stockexchange_V0.4 Supervisor")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print schedule without executing pipeline")
     args = parser.parse_args()

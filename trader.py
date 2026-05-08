@@ -89,11 +89,19 @@ def execute_trades():
                 trade_logger.update_execution(decision_id, None, 'skipped_qty_zero')
             continue
         
-        # P4: Minimum order value check
+        # P4: Minimum order value check (Scaled by env_bias)
         est_price = order.get('limit_price') or order.get('price') or 0
         order_value = qty * float(est_price)
-        if action.lower() == 'buy' and order_value < config.MIN_ORDER_VALUE:
-            print(f"   ⚠️ Skipping: Order value £{order_value:.0f} < min £{config.MIN_ORDER_VALUE:.0f}")
+        scaled_min_order_value = config.MIN_ORDER_VALUE
+        try:
+            with open('sentiment_data.json', 'r') as f:
+                s_data = json.load(f)
+                scaled_min_order_value = config.MIN_ORDER_VALUE * s_data.get('global_env_bias', 1.0)
+        except Exception:
+            pass
+            
+        if action.lower() == 'buy' and order_value < scaled_min_order_value:
+            print(f"   ⚠️ Skipping: Order value £{order_value:.0f} < min £{scaled_min_order_value:.0f}")
             if decision_id:
                 trade_logger.update_execution(decision_id, None, 'skipped_min_value')
             continue
