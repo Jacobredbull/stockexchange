@@ -61,6 +61,9 @@ def execute_trades():
     if safe_hold_mode:
         print("🚨 SAFE HOLD MODE ACTIVE: trader.py will reject ALL BUY orders.")
 
+    # Track which SELL tickers have been confirmed filled (for replacement dependency)
+    filled_sells = set()
+
     # 3. Execute Orders
     for order in orders:
         ticker = order.get('ticker')
@@ -79,6 +82,14 @@ def execute_trades():
                 print(f"   🚨 SAFE HOLD MODE ACTIVE: Rejecting BUY order for {ticker}.")
                 if decision_id:
                     trade_logger.update_execution(decision_id, None, 'rejected_safe_hold_mode')
+                continue
+
+            # --- SELL-before-BUY Dependency Check ---
+            paired_sell = order.get('paired_sell_ticker')
+            if paired_sell and paired_sell not in filled_sells:
+                print(f"   🚫 DEPENDENCY BLOCK: Cannot BUY {ticker} — paired SELL of {paired_sell} did not fill.")
+                if decision_id:
+                    trade_logger.update_execution(decision_id, None, 'skipped_sell_not_filled')
                 continue
 
         # --- P4: Force Whole-Integer Quantities ---
@@ -193,6 +204,9 @@ def execute_trades():
                             decision_id, alpaca_order_id, 'filled',
                             filled_price, filled_qty, filled_at
                         )
+                    # Track filled sell for replacement dependency
+                    if action == 'sell':
+                        filled_sells.add(ticker)
                 elif fill_status in ('partially_filled',):
                     filled_price = float(updated_order.filled_avg_price) if updated_order.filled_avg_price else None
                     filled_qty = float(updated_order.filled_qty) if updated_order.filled_qty else None

@@ -596,7 +596,59 @@ class TradingLogic:
                 'env_bias': env_bias, 'macro_reason': macro_reason
             })
 
-        # ── 5. Score candidates (new signals) ──
+        # ── 4.5 Sentiment-Driven Sell: Act on audited negative signals for held tickers ──
+        SELL_SENTIMENT_THRESHOLD = -0.4  # Only act on strong negative signals
+        print("\n--- Checking Sell Signals Against Holdings ---")
+        for signal in sentiment_data:
+            if signal.get('action') != 'Sell':
+                continue
+            sig_ticker = signal.get('ticker')
+            if not sig_ticker or sig_ticker not in current_holdings_data:
+                continue
+            # Only act on audited signals (High or Medium consensus)
+            consensus = signal.get('consensus_level')
+            if consensus not in ('High', 'Medium'):
+                continue
+            sent_score = signal.get('sentiment_score', 0)
+            if sent_score > SELL_SENTIMENT_THRESHOLD:
+                continue
+            
+            data = current_holdings_data[sig_ticker]
+            shares = int(data.get('qty', 0))
+            if shares <= 0:
+                continue
+            
+            cp = data.get('current_price') or self.fetch_price(sig_ticker)
+            if not cp:
+                continue
+            
+            sell_reason = (
+                f"Sentiment Sell: Audited {consensus} consensus, "
+                f"score={sent_score:.2f} ≤ {SELL_SENTIMENT_THRESHOLD}. "
+                f"Reason: {signal.get('reasoning', 'N/A')[:100]}"
+            )
+            print(f"  🔻 SENTIMENT SELL: {sig_ticker} ({sell_reason})")
+            
+            sid = trade_logger.log_decision({
+                'ticker': sig_ticker, 'action': 'SELL', 'quantity': shares,
+                'price': cp, 'sentiment_score': sent_score,
+                'duration_score': signal.get('duration_score'),
+                'weighted_score': sent_score,
+                'decision_reason': sell_reason
+            })
+            orders.append({
+                "ticker": sig_ticker, "action": "sell", "quantity": shares,
+                "order_type": "limit", "limit_price": cp,
+                "reason": sell_reason, "decision_id": sid
+            })
+            sold_tickers.append(sig_ticker)
+            del current_holdings_data[sig_ticker]
+            
+            # Recalculate open slots
+            num_positions = len([t for t, d in current_holdings_data.items() if d.get('qty', 0) > 0])
+            open_slots = max(0, risk_scaled_slots - num_positions)
+        
+
         candidates = []
         for signal in sentiment_data:
             if signal.get('action') != 'Buy':
@@ -794,7 +846,8 @@ class TradingLogic:
                     'decision_reason': f'Full Replace of {weakest["ticker"]}', 'weighted_score': score})
                 orders.append({"ticker": ticker, "action": "buy", "quantity": qty,
                     "order_type": "limit", "limit_price": price,
-                    "reason": f"Full Replace of {weakest['ticker']}", "decision_id": bid})
+                    "reason": f"Full Replace of {weakest['ticker']}", "decision_id": bid,
+                    "paired_sell_ticker": weakest['ticker']})
                 holdings_scored.pop(0)
                 print(f"  ✅ Sell {sq} {weakest['ticker']} → Buy {qty} {ticker}")
                 continue

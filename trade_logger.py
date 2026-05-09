@@ -125,8 +125,9 @@ def log_decision(decision_data):
                 sentiment_score, duration_score, sentiment_reason, rsi_14, sma_20, decision_reason,
                 entry_price, exit_price, pnl, pnl_percent,
                 atr_14, sma_50, high_water_mark,
-                env_bias, macro_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                env_bias, macro_reason,
+                weighted_score
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             datetime.datetime.now().isoformat(),
             decision_data.get('ticker'),
@@ -147,7 +148,8 @@ def log_decision(decision_data):
             decision_data.get('sma_50'),
             decision_data.get('high_water_mark'),
             decision_data.get('env_bias'),
-            decision_data.get('macro_reason')
+            decision_data.get('macro_reason'),
+            decision_data.get('weighted_score')
         ))
         
         row_id = c.lastrowid
@@ -268,7 +270,7 @@ def get_decisions_for_review():
                price_after_7d, price_after_14d, outcome_pnl_pct,
                decision_grade, timestamp
         FROM history
-        WHERE action IN ('BUY', 'SELL')
+        WHERE action = 'BUY'
           AND execution_status = 'filled'
           AND price_after_14d IS NOT NULL
           AND (decision_grade IS NULL OR decision_grade = '')
