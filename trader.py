@@ -7,6 +7,13 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 import config
 import trade_logger
 
+def normalize_order_status(status):
+    """Convert broker status (may be enum or string) to a plain lowercase string."""
+    raw = getattr(status, "value", status)
+    if raw is None:
+        return "unknown"
+    return str(raw).strip().lower()
+
 def execute_trades():
     print("--- Starting Automated Trader ---")
     
@@ -177,7 +184,7 @@ def execute_trades():
             submitted_order = client.submit_order(order_request)
             alpaca_order_id = str(submitted_order.id)
             print(f"   🚀 Order Submitted! ID: {alpaca_order_id}")
-            print(f"      Status: {submitted_order.status}")
+            print(f"      Status: {normalize_order_status(submitted_order.status)}")
             
             # --- Log Submission ---
             if decision_id:
@@ -189,8 +196,9 @@ def execute_trades():
             
             try:
                 updated_order = client.get_order_by_id(alpaca_order_id)
-                fill_status = updated_order.status
-                print(f"   📋 Order Status: {fill_status}")
+                raw_status = updated_order.status
+                fill_status = normalize_order_status(raw_status)
+                print(f"   📋 Order Status: {fill_status} (raw: {raw_status})")
                 
                 if fill_status == 'filled':
                     filled_price = float(updated_order.filled_avg_price) if updated_order.filled_avg_price else None
@@ -207,7 +215,7 @@ def execute_trades():
                     # Track filled sell for replacement dependency
                     if action == 'sell':
                         filled_sells.add(ticker)
-                elif fill_status in ('partially_filled',):
+                elif fill_status in ('partially_filled', 'partial_fill'):
                     filled_price = float(updated_order.filled_avg_price) if updated_order.filled_avg_price else None
                     filled_qty = float(updated_order.filled_qty) if updated_order.filled_qty else None
                     print(f"   ⚠️ PARTIAL FILL: {filled_qty} shares @ ${filled_price}")
