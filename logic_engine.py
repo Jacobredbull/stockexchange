@@ -562,10 +562,11 @@ class TradingLogic:
         risk_sells, risk_proceeds = self.check_portfolio_risks(current_holdings_data)
         orders.extend(risk_sells)
         
-        # ── 3.1 FIX: State Leak Prevention ──
+        # ── 3.1 FIX: Initialize sold_tickers early — all downstream logic reads this ──
+        sold_tickers = [o['ticker'] for o in risk_sells]
+        
         # Immediately remove sold tickers from holdings so they don't block slots or appear in further logic
-        for order in risk_sells:
-            ticker = order['ticker']
+        for ticker in sold_tickers:
             if ticker in current_holdings_data:
                 del current_holdings_data[ticker]
                 
@@ -715,6 +716,7 @@ class TradingLogic:
                     "order_type": "limit", "limit_price": weakest['price'],
                     "reason": f"Slot limit enforced ({risk_scaled_slots})", "decision_id": sid})
                 # Prevent this ticker from blocking buys later
+                sold_tickers.append(weakest['ticker'])
                 if weakest['ticker'] in current_holdings_data:
                     del current_holdings_data[weakest['ticker']]
                 print(f"    ❌ Purged {weakest['ticker']} (Score: {weakest['score']:.3f})")
@@ -722,8 +724,7 @@ class TradingLogic:
         else:
             open_slots = risk_scaled_slots - len(holdings_scored)
         
-        # Keep track of sold tickers for replacement logic
-        sold_tickers = [o['ticker'] for o in orders if o['action'] == 'sell']
+        # sold_tickers is already maintained from risk sells + purge sells above
         
         # ── 7. Execute: Fill slots → Replacements ──
         for cand in candidates:

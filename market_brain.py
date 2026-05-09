@@ -433,12 +433,9 @@ def apply_consensus(signals, audit_map, kill_switch_threshold=0.35):
     - Consensus Level: High (≤0.15), Medium (≤0.35), discarded (>0.35)
     """
     if audit_map is None:
-        # Gemini unavailable — mark all as unverified
-        for sig in signals:
-            sig['consensus_level'] = 'unverified'
-            sig['model_delta'] = None
-            sig['gemini_scores'] = None
-        return signals
+        # FAIL CLOSED: Audit unavailable — discard ALL signals for live trading safety
+        print("  🚨 AUDIT GATE CLOSED: audit_map is None (API/JSON failure). Discarding all candidate signals.")
+        return []
     
     consensus_signals = []
     
