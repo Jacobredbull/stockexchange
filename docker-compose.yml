@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────
-# stockexchange_V0.4 — Docker Compose (Pi 5)
+# stockexchange_V0.5 — Docker Compose (Pi 5)
 # ─────────────────────────────────────────────
 services:
-  stockexchange_v04:
+  stockexchange_v05:
     build: .
-    container_name: stockexchange_v04
+    container_name: stockexchange_v05
     restart: always
     env_file: .env
     dns:

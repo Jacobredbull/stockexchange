@@ -1,5 +1,5 @@
 """
-stockexchange_V0.4 — Telegram Bot (Monitoring & Alerts)
+stockexchange_V0.5 — Telegram Bot (Monitoring & Alerts)
 
 Functions:
   send_summary()   — Post-run session report (Bias, P/L, Gainers/Losers, Shadow Alerts)
@@ -204,7 +204,7 @@ def send_summary(session_name: str = "Session", success: bool = True):
 
     # Build message
     lines = [
-        f"{status_icon} *stockexchange\\_V0.4 — {session_name}*",
+        f"{status_icon} *stockexchange\\_V0.5 — {session_name}*",
         f"📅 {now_ny} ({now_ldn})",
         "",
         f"*🌍 Macro Environment*",
@@ -285,7 +285,7 @@ def send_heartbeat():
         holdings_count = 0
 
     text = (
-        f"💓 *stockexchange\\_V0.4 — Heartbeat*\n"
+        f"💓 *stockexchange\\_V0.5 — Heartbeat*\n"
         f"📅 Monday {now_ny} ({now_ldn})\n"
         f"\n"
         f"🤖 System: `ONLINE`\n"
@@ -316,12 +316,12 @@ def send_backup():
 
 def send_alert(message: str):
     """General purpose alert (errors, defense mode triggers, etc.)."""
-    text = f"🚨 *stockexchange\\_V0\.4 Alert*\n\n{message}"
+    text = f"🚨 *stockexchange\\_V0\.5 Alert*\n\n{message}"
     _send_message(text)
 
 def send_emergency_alert(message: str):
     """High-priority emergency alert — sent as plain text to avoid Markdown parse errors."""
-    text = f"\u203c\ufe0f stockexchange_V0.4 \u2014 EMERGENCY\n\n{message}"
+    text = f"\u203c\ufe0f stockexchange_V0.5 \u2014 EMERGENCY\n\n{message}"
     _send_message(text, parse_mode=None)
 
 
