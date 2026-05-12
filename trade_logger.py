@@ -290,11 +290,15 @@ def get_decisions_for_review():
 
 
 def is_blacklisted(ticker, current_bias=None):
-    """Returns True if this ticker was SOLD in the last COOLDOWN_DAYS days.
+    """Returns True if this ticker had a NEGATIVE exit in the last COOLDOWN_DAYS days.
+    Reason-aware: Budget Trim and Slot Purge sells do NOT trigger blacklist.
     R4: News Override — if current_bias >= BLACKLIST_OVERRIDE_BIAS, override."""
     # R4: News Override
     if current_bias is not None and current_bias >= config.BLACKLIST_OVERRIDE_BIAS:
         return False
+    
+    # Sell reasons that are portfolio management, NOT negative signals about the ticker
+    NON_NEGATIVE_PATTERNS = ('Budget Trim', 'Slot Purge', 'Partial Swap')
     
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -303,16 +307,23 @@ def is_blacklisted(ticker, current_bias=None):
         cutoff = (datetime.datetime.now() - datetime.timedelta(days=config.COOLDOWN_DAYS)).isoformat()
         
         c.execute('''
-            SELECT COUNT(*) FROM history
+            SELECT decision_reason FROM history
             WHERE ticker = ? 
               AND action = 'SELL'
               AND timestamp > ?
               AND (execution_status IS NULL OR execution_status NOT IN ('rejected', 'skipped_no_position'))
         ''', (ticker, cutoff))
         
-        count = c.fetchone()[0]
+        rows = c.fetchall()
         conn.close()
-        return count > 0
+        
+        # Only count sells with negative reasons (ATR stop, trend breakdown, etc.)
+        for (reason,) in rows:
+            if reason and any(pat in reason for pat in NON_NEGATIVE_PATTERNS):
+                continue  # Skip portfolio management sells
+            return True  # Found a genuine negative exit
+        
+        return False
     except Exception as e:
         print(f"Error checking blacklist for {ticker}: {e}")
         return False
@@ -343,6 +354,79 @@ def get_last_buy_time(ticker):
     except Exception as e:
         print(f"Error fetching last buy time for {ticker}: {e}")
         return None
+
+
+def get_high_water_mark(ticker):
+    """Returns the most recent persisted high_water_mark for a ticker,
+    scoped to the CURRENT position only (after the latest BUY).
+    Prevents stale HWM from a closed position affecting a new re-entry."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        # Find the most recent FILLED BUY timestamp for this ticker
+        # Skipped/rejected BUYs must not reset the HWM boundary
+        c.execute('''
+            SELECT timestamp FROM history
+            WHERE ticker = ? AND action = 'BUY' AND execution_status = 'filled'
+            ORDER BY timestamp DESC LIMIT 1
+        ''', (ticker,))
+        buy_row = c.fetchone()
+        
+        if not buy_row:
+            conn.close()
+            return None
+        
+        last_buy_ts = buy_row[0]
+        
+        # Only read HWM records AFTER the most recent BUY
+        c.execute('''
+            SELECT high_water_mark FROM history
+            WHERE ticker = ? AND high_water_mark IS NOT NULL
+              AND timestamp >= ?
+            ORDER BY timestamp DESC LIMIT 1
+        ''', (ticker, last_buy_ts))
+        result = c.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except Exception as e:
+        print(f"Error fetching HWM for {ticker}: {e}")
+        return None
+
+
+def get_consecutive_elevated_days():
+    """Counts how many consecutive days env_bias has been < 0.5 (ELEVATED tier).
+    Used by the ELEVATED decay logic (caller gates on 0.3 <= env_bias < 0.5,
+    so this is never invoked during CRITICAL mode).
+    Looks at the most recent RISK_SCALED records and counts backward until finding
+    a session with env_bias >= 0.5."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('''
+            SELECT timestamp, env_bias FROM history
+            WHERE action = 'RISK_SCALED' AND env_bias IS NOT NULL
+            ORDER BY timestamp DESC LIMIT 60
+        ''')
+        rows = c.fetchall()
+        conn.close()
+
+        if not rows:
+            return 0
+
+        # Count consecutive records with env_bias < 0.5
+        consecutive_count = 0
+        for ts, bias in rows:
+            if bias < 0.5:
+                consecutive_count += 1
+            else:
+                break
+
+        # Convert sessions to days (2 sessions per trading day)
+        return max(consecutive_count // 2, 0)
+    except Exception as e:
+        print(f"Error counting ELEVATED days: {e}")
+        return 0
 
 
 def get_pending_scouts():

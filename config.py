@@ -110,9 +110,17 @@ ATR_MULTIPLIER_ELEVATED = 0.7      # ATR mult scale for Elevated mode
 
 # --- STRATEGY OPTIMIZATIONS ---
 MOMENTUM_SMA_PERIOD = 5            # 5-day SMA for swap/replace momentum filter
+MOMENTUM_GAP_TOLERANCE = 0.02     # Block entry if price > 2% below SMA20
 TIME_STOP_DAYS = 21                # Force-sell losing positions after N trading days
 RECOVERY_RAMP_SESSIONS = 3         # After defense exit, limit to 1 new slot for N sessions
 SENTIMENT_MAX_AGE_DAYS = 2         # Reject sentiment data older than N days
+
+# --- ELEVATED MODE DECAY ---
+# If env_bias stays ELEVATED (< 0.5) for too long, gradually relax min_entry_score
+# so the system doesn't freeze indefinitely
+ELEVATED_DECAY_DAYS = 7            # Start decaying after N consecutive ELEVATED days
+ELEVATED_DECAY_RATE = 0.02         # Reduce min_entry_score by this per day past threshold
+ELEVATED_MIN_FLOOR = 0.50          # Never decay below this score
 
 # --- TELEGRAM MONITORING ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

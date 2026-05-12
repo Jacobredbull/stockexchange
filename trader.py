@@ -70,6 +70,7 @@ def execute_trades():
 
     # Track which SELL tickers have been confirmed filled (for replacement dependency)
     filled_sells = set()
+    partially_filled_sells = {}  # ticker -> filled_qty for partial fills
 
     # 3. Execute Orders
     for order in orders:
@@ -94,9 +95,16 @@ def execute_trades():
             # --- SELL-before-BUY Dependency Check ---
             paired_sell = order.get('paired_sell_ticker')
             if paired_sell and paired_sell not in filled_sells:
-                print(f"   🚫 DEPENDENCY BLOCK: Cannot BUY {ticker} — paired SELL of {paired_sell} did not fill.")
-                if decision_id:
-                    trade_logger.update_execution(decision_id, None, 'skipped_sell_not_filled')
+                # Check if the paired SELL was partially filled (vs not filled at all)
+                partial_status = partially_filled_sells.get(paired_sell)
+                if partial_status:
+                    print(f"   🚫 DEPENDENCY BLOCK: Cannot BUY {ticker} — paired SELL of {paired_sell} only partially filled ({partial_status} shares).")
+                    if decision_id:
+                        trade_logger.update_execution(decision_id, None, 'deferred_sell_partial')
+                else:
+                    print(f"   🚫 DEPENDENCY BLOCK: Cannot BUY {ticker} — paired SELL of {paired_sell} did not fill.")
+                    if decision_id:
+                        trade_logger.update_execution(decision_id, None, 'skipped_sell_not_filled')
                 continue
 
         # --- P4: Force Whole-Integer Quantities ---
@@ -225,6 +233,9 @@ def execute_trades():
                             decision_id, alpaca_order_id, 'partial_fill',
                             filled_price, filled_qty
                         )
+                    # Track partial sells for dependency logging
+                    if action == 'sell' and filled_qty:
+                        partially_filled_sells[ticker] = filled_qty
                 elif fill_status in ('cancelled', 'expired', 'rejected'):
                     print(f"   ❌ Order {fill_status.upper()}")
                     if decision_id:

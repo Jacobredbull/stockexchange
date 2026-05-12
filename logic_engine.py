@@ -278,24 +278,30 @@ class TradingLogic:
                 # Fallback: flat 8% stop if ATR unavailable
                 stop_price = buy_price * 0.92
             
-            # --- BREAKEVEN RULE (P3) ---
-            # At +3% unrealized gain, move stop to entry price
+            # --- BREAKEVEN RULE (P3) --- Persisted High Water Mark ---
+            # Once price hits +3%, breakeven is permanently locked via DB-persisted HWM.
+            # This survives across sessions: even if price drops back, stop stays at entry.
             is_breakeven_active = False
             is_trailing_active = False
+            peak_price_ever = current_price  # Default; updated below
             if buy_price > 0:
-                unrealized_gain_pct = (current_price - buy_price) / buy_price
+                # Read persisted HWM from DB — survives across sessions
+                persisted_hwm = trade_logger.get_high_water_mark(ticker)
+                # Only use persisted HWM + current live price.
+                # Do NOT use ohlc daily highs — they may include days before entry.
+                peak_price_ever = max(current_price, persisted_hwm or 0)
                 
-                if unrealized_gain_pct >= self.trailing_activation_pct:
-                    # TRAILING STOP: 1.5% from peak (use recent high as proxy)
-                    peak_price = current_price  # Conservative: current = peak
-                    if ohlc is not None and 'high' in ohlc.columns and len(ohlc) >= 5:
-                        peak_price = max(float(ohlc['high'].iloc[-5:].max()), current_price)
-                    trailing_stop = peak_price * (1 - self.trailing_drop_pct)
+                # Use HISTORICAL peak (not just current price) for activation checks
+                max_gain_pct = (peak_price_ever - buy_price) / buy_price
+                
+                if max_gain_pct >= self.trailing_activation_pct:
+                    # TRAILING STOP: 1.5% drop from persisted peak
+                    trailing_stop = peak_price_ever * (1 - self.trailing_drop_pct)
                     if trailing_stop > stop_price:
                         stop_price = trailing_stop
                         is_trailing_active = True
-                elif unrealized_gain_pct >= self.breakeven_trigger_pct:
-                    # BREAKEVEN: move stop to entry price
+                elif max_gain_pct >= self.breakeven_trigger_pct:
+                    # BREAKEVEN: once triggered by historical peak, NEVER reverts
                     if buy_price > stop_price:
                         stop_price = buy_price
                         is_breakeven_active = True
@@ -303,12 +309,9 @@ class TradingLogic:
             if current_price < stop_price:
                 drop_pct = (1 - current_price / buy_price) * 100
                 if is_trailing_active:
-                    peak_price = current_price
-                    if ohlc is not None and 'high' in ohlc.columns and len(ohlc) >= 5:
-                        peak_price = max(float(ohlc['high'].iloc[-5:].max()), current_price)
-                    drop_from_peak = ((peak_price - current_price) / peak_price) * 100
+                    drop_from_peak = ((peak_price_ever - current_price) / peak_price_ever) * 100
                     sell_reason = (
-                        f"SELL: Trailing Stop hit ({drop_from_peak:.1f}% drop from peak ${peak_price:.2f}) | "
+                        f"SELL: Trailing Stop hit ({drop_from_peak:.1f}% drop from peak ${peak_price_ever:.2f}) | "
                         f"Entry: ${buy_price:.2f} → Current: ${current_price:.2f} | Stop: ${stop_price:.2f}"
                     )
                 elif is_breakeven_active:
@@ -347,7 +350,7 @@ class TradingLogic:
                         trade_logger.log_decision({
                             'ticker': ticker, 'action': 'HOLD', 'quantity': shares,
                             'price': current_price, 'sma_20': sma_20, 'sma_50': sma_50,
-                            'atr_14': atr_14,
+                            'atr_14': atr_14, 'high_water_mark': peak_price_ever,
                             'decision_reason': f'Grace Period ({hours_held:.1f}h): Whipsaw breakdown suppressed'
                         })
                         continue  # Skip to next holding
@@ -387,11 +390,8 @@ class TradingLogic:
                 print(f"  🚨 SELL ALERT for {ticker}: {sell_reason}")
                 print(f"     P&L: ${pnl:.2f} ({pnl_pct:.2f}%) | Est. Proceeds: ${estimated_proceeds:.2f}")
                 
-                # Determine high_water_mark for logging
-                log_hwm = None
-                if ohlc is not None and 'high' in ohlc.columns and len(ohlc) >= 5:
-                    log_hwm = float(ohlc['high'].iloc[-5:].max())
-                    log_hwm = max(log_hwm, current_price)
+                # Use the persisted peak price (already computed above)
+                log_hwm = peak_price_ever
                 
                 risk_decision_id = trade_logger.log_decision({
                     'ticker': ticker,
@@ -440,6 +440,7 @@ class TradingLogic:
                     'sma_20': sma_20,
                     'sma_50': sma_50,
                     'atr_14': atr_14,
+                    'high_water_mark': peak_price_ever,
                     'decision_reason': f"Safe from ATR Stop & Trailing TP & Whipsaw Breakdown{ta_status}"
                 })
                 
@@ -525,6 +526,17 @@ class TradingLogic:
                     risk_scaled_slots = max_slots
                     min_entry_score = min_score
                     break
+            
+            # P4: ELEVATED Decay — if stuck in ELEVATED too long, relax min_score gradually
+            # Only applies to ELEVATED (0.3-0.5), NEVER relaxes CRITICAL (<0.3)
+            if 0.3 <= env_bias < 0.5:
+                elevated_days = trade_logger.get_consecutive_elevated_days()
+                if elevated_days > config.ELEVATED_DECAY_DAYS:
+                    decay = (elevated_days - config.ELEVATED_DECAY_DAYS) * config.ELEVATED_DECAY_RATE
+                    original_min = min_entry_score
+                    min_entry_score = max(min_entry_score - decay, config.ELEVATED_MIN_FLOOR)
+                    if min_entry_score < original_min:
+                        print(f"  📉 ELEVATED Decay: {elevated_days}d consecutive → min_score {original_min:.2f} → {min_entry_score:.2f}")
             
             if env_bias < 0.3:
                 risk_label = "🔴 CRITICAL"
@@ -695,7 +707,7 @@ class TradingLogic:
                     'decision_reason': f'SKIP: RSI {rsi:.1f}'})
                 continue
             
-            # Downtrend filter
+            # Downtrend filter (strong): price < SMA20 AND SMA20 < SMA50
             if sma_20 and sma_50 and price < sma_20 and sma_20 < sma_50:
                 is_oversold = rsi is not None and rsi < 35
                 if not is_oversold:
@@ -704,6 +716,18 @@ class TradingLogic:
                     trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
                         'sentiment_score': bias, 'rsi_14': rsi, 'sma_20': sma_20, 'sma_50': sma_50,
                         'decision_reason': f'SKIP: Downtrend gap {gap_pct:.1f}%'})
+                    continue
+            
+            # [P1] Momentum filter: block entry if price significantly below SMA20
+            # Even if SMA20 > SMA50 (not a full downtrend), being >2% below SMA20
+            # indicates weak short-term momentum — most such entries lost money.
+            if sma_20 and price < sma_20:
+                gap_pct = ((sma_20 - price) / sma_20) * 100
+                if gap_pct > config.MOMENTUM_GAP_TOLERANCE * 100:
+                    print(f"  🚫 {ticker}: Below SMA20 by {gap_pct:.1f}% (tolerance: {config.MOMENTUM_GAP_TOLERANCE*100:.0f}%)")
+                    trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                        'sentiment_score': bias, 'rsi_14': rsi, 'sma_20': sma_20,
+                        'decision_reason': f'SKIP: Momentum filter — price {gap_pct:.1f}% below SMA20'})
                     continue
             
             score = self.calculate_weighted_score(bias, 0, atr or 0, price)
@@ -724,10 +748,31 @@ class TradingLogic:
             candidates.append({
                 'ticker': ticker, 'score': score, 'price': price, 'qty': qty,
                 'bias': bias, 'atr': atr, 'rsi': rsi, 'sma_20': sma_20, 'sma_50': sma_50,
-                'sma_5': sma_5
+                'sma_5': sma_5, 'consensus': signal.get('consensus_level', 'Low')
             })
         
-        candidates.sort(key=lambda x: x['score'], reverse=True)
+        # Deduplicate candidates by ticker BEFORE sorting — keep the strongest per ticker
+        # Prevents duplicate BUY/SKIP decisions and distorted ranking pressure
+        seen_tickers = {}
+        consensus_weight = {'High': 3, 'Medium': 2, 'Low': 1, 'None': 0}
+        for cand in candidates:
+            t = cand['ticker']
+            if t not in seen_tickers:
+                seen_tickers[t] = cand
+            else:
+                existing = seen_tickers[t]
+                if cand['score'] > existing['score']:
+                    seen_tickers[t] = cand
+                elif cand['score'] == existing['score']:
+                    c_weight = consensus_weight.get(cand.get('consensus', 'Low'), 1)
+                    e_weight = consensus_weight.get(existing.get('consensus', 'Low'), 1)
+                    if c_weight > e_weight:
+                        seen_tickers[t] = cand
+                        
+        if len(seen_tickers) < len(candidates):
+            print(f"  🔀 Deduplicated candidates: {len(candidates)} → {len(seen_tickers)} (removed {len(candidates) - len(seen_tickers)} duplicates)")
+        
+        candidates = sorted(seen_tickers.values(), key=lambda x: x['score'], reverse=True)
         
         # ── 6. Score existing holdings ──
         holdings_scored = []
@@ -777,6 +822,7 @@ class TradingLogic:
             open_slots = risk_scaled_slots - len(holdings_scored)
         
         # sold_tickers is already maintained from risk sells + purge sells above
+        bought_this_session = set()  # [BUG FIX] Prevent same ticker bought twice in one session
         
         # ── 7. Execute: Fill slots → Replacements ──
         for cand in candidates:
@@ -784,8 +830,15 @@ class TradingLogic:
             
             if ticker in sold_tickers:
                 continue
+            if ticker in bought_this_session:
+                continue
             if ticker in current_holdings_data and current_holdings_data[ticker].get('qty', 0) > 0:
                 continue
+            
+            # [BUG FIX] Pre-cap qty to slot budget BEFORE ordering
+            slot_cap = (self.budget / self.max_slots) * self._env_bias
+            max_affordable_qty = math.floor(slot_cap / price) if price > 0 else 0
+            qty = min(qty, max_affordable_qty)
             
             # P4: Min order value (Scaled by env_bias to avoid blocking trades during low-bias periods)
             order_value = qty * price if qty > 0 else 0
@@ -809,6 +862,8 @@ class TradingLogic:
                 orders.append({"ticker": ticker, "action": "buy", "quantity": qty,
                     "order_type": "limit", "limit_price": price, "reason": reason, "decision_id": did})
                 open_slots -= 1
+                bought_this_session.add(ticker)
+                current_holdings_data[ticker] = {'qty': qty, 'avg_entry': price, 'current_price': price}
                 print(f"  ✅ BUY {qty} {ticker} @ ${price:.2f} [DB#{did}]")
                 continue
             
@@ -825,6 +880,17 @@ class TradingLogic:
                 trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
                     'sentiment_score': cand['bias'], 'weighted_score': score,
                     'decision_reason': f'SKIP: Negative 5d momentum ${price:.2f} < SMA5 ${sma_5:.2f}'})
+                continue
+            
+            # [P3] Trend confirmation for swap/replace: target must be above SMA20
+            # DeepSeek data: 5/5 Full Replace trades lost money — all entered weak trends
+            cand_sma20 = cand.get('sma_20')
+            if cand_sma20 and price < cand_sma20:
+                gap_pct = ((cand_sma20 - price) / cand_sma20) * 100
+                print(f"  🚫 {ticker}: Replace blocked — below SMA20 by {gap_pct:.1f}% (no uptrend confirmation)")
+                trade_logger.log_decision({'ticker': ticker, 'action': 'SKIP', 'price': price,
+                    'sentiment_score': cand['bias'], 'weighted_score': score,
+                    'decision_reason': f'SKIP: Replace blocked — price {gap_pct:.1f}% below SMA20'})
                 continue
             
             # P1: Full replacement (≥20%)
@@ -849,6 +915,8 @@ class TradingLogic:
                     "reason": f"Full Replace of {weakest['ticker']}", "decision_id": bid,
                     "paired_sell_ticker": weakest['ticker']})
                 holdings_scored.pop(0)
+                bought_this_session.add(ticker)
+                current_holdings_data[ticker] = {'qty': qty, 'avg_entry': price, 'current_price': price}
                 print(f"  ✅ Sell {sq} {weakest['ticker']} → Buy {qty} {ticker}")
                 continue
             
